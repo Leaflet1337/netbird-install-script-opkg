@@ -1,7 +1,8 @@
 #!/bin/sh
 # Автоматический скрипт развертывания NetBird для Keenetic (Entware)
-# Скрипт полностью автономен, использует Base64 для обхода проблем с синтаксисом кавычек в sh
+# Скрипт полностью автономен, ставит зависимости, лечит проблемы фаервола и зацикливания
 
+# Завершение при ошибках
 set -e
 
 echo ""
@@ -32,24 +33,105 @@ if [ ! -f /opt/sbin/iptables.real ]; then
     fi
 fi
 
-# Декодируем эмулятор iptables из Base64 (защита от краша кавычек)
-echo "IyEvYmluL3NoCiMgVW1uYXlhIHphZ2x1c2hrYS1lbXVsYXRvciBpcHRhYmxlcyBkbHlhIHByZWRvdHZyYXNoY2hlbml5YSBrcmFzaGEgZGVtb25hIE5ldEJpcmQKY2FzZSAiJCoiIGluCiAgICAqIi1MIip8KiItUyIqKQogICAgICAgIGVjaG8gIkNoYWluIElOUFVUIChwb2xpY3kgQUNDRVBUKSIKICAgICAgICBlY2hvICJDaGFpbiBGT1JXQVJEIChwb2xpY3kgQUNDRVBUKSIKICAgICAgICBlY2hvICJDaGFpbiBPVVRQVVQgKHBvbGljeSBBQ0NFUFQpIgogICAgICAgIGV4aXQgMAogICAgICAgIDs7CiAgICAqIi12IiopCiAgICAgICAgZWNobyAiaXB0YWJsZXMgdjEuNC4yMSIKICAgICAgICBleGl0IDAKICAgICAgICA7OwogICAgKiItTiIqfCoiLUYiKnwqIi1YIip8KiItQSIqfCoiLUkiKikKICAgICAgICBleGl0IDAKICAgICAgICA7Owplc2FjCi9vcHQvc2JpLmlwdGFibGVzLnJlYWwgIiRAIgo=" | base64 -d > /opt/sbin/iptables
+cat << 'EOF' > /opt/sbin/iptables
+#!/bin/sh
+# Умная заглушка-эмулятор iptables для предотвращения краша демона NetBird
+case "$*" in
+    *"-L"*|*"-S"*)
+        echo "Chain INPUT (policy ACCEPT)"
+        echo "Chain FORWARD (policy ACCEPT)"
+        echo "Chain OUTPUT (policy ACCEPT)"
+        exit 0
+        ;;
+    *"-v"*)
+        echo "iptables v1.4.21"
+        exit 0
+        ;;
+    *"-N"*|*"-F"*|*"-X"*|*"-A"*|*"-I"*)
+        exit 0
+        ;;
+esac
+/opt/sbin/iptables.real "$@"
+EOF
 chmod +x /opt/sbin/iptables
 
 # Шаг 4. Создание базового config.json
 echo "[4/7] Генерация эталонного файла конфигурации config.json..."
 mkdir -p /opt/etc/netbird
-echo "ewogICJXZ0lmYWNlIjogInd0MCIsCiAgIldnUG9ydCI6IDUxODI1LAogICJEaXNhYmxlRmlyZXdhbGwiOiB0cnVlLAogICJJRmFjZURpc2NvdmVyIjogZmFsc2UKfQo=" | base64 -d > /opt/etc/netbird/config.json
+cat << 'EOF' > /opt/etc/netbird/config.json
+{
+  "WgIface": "wt0",
+  "WgPort": 51825,
+  "DisableFirewall": true,
+  "IFaceDiscover": false
+}
+EOF
 
 # Шаг 5. Создание демона автозапуска
 echo "[5/7] Установка скрипта инициализации демона S99netbird..."
-echo "IyEvYmluL3NoCkVOQUJMRUQ9eWVzClBST0c9L29wdC9zYmluL25ldGJpcmQKQVJHUz0ic2VydmljZSBydW4gLS1sb2ctZmlsZSAvb3B0L3Zhci9sb2cvbmV0YmlyZC5sb2cgLS1sb2ctbGV2ZWwgaW5mbyAtLWRhZW1vbi1hZGRyIHVuaXg6Ly8vb3B0L3Zhci9ydW4vbmV0YmlyZC5zb2NrIgoKY2FzZSAiJDEiIGluCiAgICBzdGFydCkKICAgICAgICBpZiBbICIkRU5BQkxFRCIgPSAieWVzIiBdOyB0aGVuCiAgICAgICAgICAgIG1rZGlyIC1wIC9vcHQvdmFyL3J1bgogICAgICAgICAgICBleHBvcnQgTkJfRElTQUJMRV9GSVJFV0FMTD10cnVlCiAgICAgICAgICAgICRQUk9HICRBUkdTIColorogICAgICAgIGZpCiAgICAgICAgOzsKICAgIHN0b3ApCiAgICAgICkga2lsbGFsbCAtOSBuZXRiaXJkIDI+L2Rldi9udWxsCiAgICAgICAgOzsKICAgIHJlc3RhcnQpCiAgICAgICAgJDAgc3RvcAogICAgICAgIHNsZWVwIDIKICAgICAgICAkMCBzdGFydAogICAgICAgIDs7CiAgICAqKQogICAgICAgIGVjaG8gIlVzYWdlOiAkMCB7c3RhcnR8c3RvcHxyZXN0YXJ0fSIKICAgICAgICBleGl0IDEKICAgICAgICA7Owplc2FjCg==" | base64 -d > /opt/etc/init.d/S99netbird
+cat << 'EOF' > /opt/etc/init.d/S99netbird
+#!/bin/sh
+ENABLED=yes
+PROG=/opt/sbin/netbird
+ARGS="service run --log-file /opt/var/log/netbird.log --log-level info --daemon-addr unix:///opt/var/run/netbird.sock"
+
+case "$1" in
+    start)
+        if [ "$ENABLED" = "yes" ]; then
+            mkdir -p /opt/var/run
+            export NB_DISABLE_FIREWALL=true
+            $PROG $ARGS &
+        fi
+        ;;
+    stop)
+        killall netbird 2>/dev/null
+        ;;
+    restart)
+        $0 stop
+        sleep 2
+        $0 start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+EOF
 chmod +x /opt/etc/init.d/S99netbird
 
 # Шаг 6. Настройка хука NDM netfilter.d с защитой от зацикливания
 echo "[6/7] Создание хука маршрутизации Keenetic с Lock-защитой..."
 mkdir -p /opt/etc/ndm/netfilter.d
-echo "IyEvYmluL3NoCiMgWmFzaGNoaXRueXkgTG9jay1mYWlsIG90IHJla3Vyc2l2bm9nbyB2eXpvdmEgc29ieXRpeSBmYWVydm9sYSBORE0gS2VlbmV0aWMKTE9DS0ZJTEU9L3RtcC9uZXRiaXJkX25ldGZpbHRlci5sb2NrCmlmIFsgLWYgIiRMT0NLRklMRSIgXTsgdGhlbgogICAgZXhpdCAwCmZpCnRvdWNoICIkTE9DS0ZJTEUiCgpJUFQ9Ii9vcHQvc2JpLmlwdGFibGVzLnJlYWwgaXB0YWJsZXMiCk5FVEJJUkRfTkVUPSIxMDAuNjQuMC4wLzEwIgoKY2FzZSAiJHRhYmxlIiBpbgogIGZpbHRlcikKICAgICRJUFQgLUMgSU5QVVQgLWkgd3QwIC1qIEFDQ0VQVCAyPi9kZXYvbnVsbCB8fCAkSVBUIC1JIElOUFVUIDEgLWkgd3QwIC1qIEFDQ0VQVAogICAgJElQVCAtQyBGT1JXQVJEIC1pIHd0MCAtbyBicjAgLWogQUNDRVBUIDI+L2Rldi9udWxsIHx8ICRJUFQgLUkgRk9SV0FSRCAxIC1pIHd0MCAtbyBicjAgLWogQUNDRVBUCiAgICAkSVBUIC1DIEZPUldBUkQgLW0gc3RhdGUgLS1zdGF0ZSBSRUxBVEVELEVTVEFCTElTSEVEIC1qIENDQ0VQVCAyPi9kZXYvbnVsbCB8fCAkSVBUIC1JI0ZPUldBUkQgMSAtbSBzdGF0ZSAtLXN0YXRlIFJFTEFURUQsRVNUQUJMSVNIRUQgLWogQUNDRVBUCiAgICA7OwogIG5hdCkKICAgIC9vcHQvc2JpLmlwdGFibGVzLnJlYWwgaXB0YWJsZXMgLXQgbmF0IC1DIFBPU1RST1VUSU5HIC1zICRORVRCSVJEX05FVCAtbyBicjAgLWogTUFTUVVFUkFERSAyPi9kZXYvbnVsbCB8fCBcCiAgICAgIC9vcHQvc2JpLmlwdGFibGVzLnJlYWwgaXB0YWJsZXMgLXQgbmF0IC1JIFBPU1RST1VUSU5HIDEgLXMgJE5FVEJJUkRfTkVUIC1vIGJyMCAtaiBNQVNRVUVSQURFCiAgICA7Owplc2FjCgojIE90cGx5dWNoYWVtIHJwX2ZpbHRlciBkbHlhIHZraG9keWFzaGNoZWdvIHRyYWZpa2EgbWVzaC1zZXRpCmZvciBmIGluIC9wcm9jL3N5cy9uZXQvaXB2NC9jb25mLyovcnBfZmlsdGVyOyBkbyBlY2hvIDAgPiAiJGYiOyBkb25lCgpybSAtZiAiJExPQ0tGSUxFIgpleGl0IDAK" | base64 -d > /opt/etc/ndm/netfilter.d/netbird.sh
+cat << 'EOF' > /opt/etc/ndm/netfilter.d/netbird.sh
+#!/bin/sh
+# Защитный Lock-файл от рекурсивного вызова событий фаервола NDM Keenetic
+LOCKFILE=/tmp/netbird_netfilter.lock
+if [ -f "$LOCKFILE" ]; then
+    exit 0
+fi
+touch "$LOCKFILE"
+
+IPT="/opt/sbin/iptables.real iptables"
+NETBIRD_NET="100.64.0.0/10"
+
+case "$table" in
+  filter)
+    $IPT -C INPUT -i wt0 -j ACCEPT 2>/dev/null || $IPT -I INPUT 1 -i wt0 -j ACCEPT
+    $IPT -C FORWARD -i wt0 -o br0 -j ACCEPT 2>/dev/null || $IPT -I FORWARD 1 -i wt0 -o br0 -j ACCEPT
+    $IPT -C FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || $IPT -I FORWARD 1 -m state --state RELATED,ESTABLISHED -j ACCEPT
+    ;;
+  nat)
+    /opt/sbin/iptables.real iptables -t nat -C POSTROUTING -s $NETBIRD_NET -o br0 -j MASQUERADE 2>/dev/null || \
+      /opt/sbin/iptables.real iptables -t nat -I POSTROUTING 1 -s $NETBIRD_NET -o br0 -j MASQUERADE
+    ;;
+esac
+
+# Отключаем rp_filter для входящего трафика mesh-сети
+for f in /proc/sys/net/ipv4/conf/*/rp_filter; do echo 0 > "$f"; done
+
+rm -f "$LOCKFILE"
+exit 0
+EOF
 chmod +x /opt/etc/ndm/netfilter.d/netbird.sh
 
 # Шаг 7. Запуск служб и применение правил в реальном времени
