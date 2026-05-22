@@ -152,9 +152,9 @@ echo ""
 # Интерактивная часть для авторизации
 read -p "Хотите выполнить привязку к серверу прямо сейчас? [y/n]: " run_auth
 if [ "$run_auth" = "y" ] || [ "$run_auth" = "Y" ]; then
-    read -p "Введите Management URL [По умолчанию: https://netbird.um-ural.ru]: " user_url
+    read -p "Введите Management URL [По умолчанию: https://netbird.io]: " user_url
     if [ -z "$user_url" ]; then
-        user_url="https://netbird.um-ural.ru"
+        user_url="https://netbird.io"
     fi
     
     read -p "Введите ваш Setup Key: " user_key
@@ -168,7 +168,7 @@ if [ "$run_auth" = "y" ] || [ "$run_auth" = "Y" ]; then
 else
     echo "Вы отказались от немедленной авторизации."
     echo "Для завершения настройки выполните команду вручную в любое время:"
-    echo "netbird up --management-url https://netbird.um-ural.ru --setup-key ВАШ_КЛЮЧ"
+    echo "netbird up --management-url https://netbird.io --setup-key ВАШ_КЛЮЧ"
 fi
 echo ""
 echo "Настройка полностью завершена! Проверьте статус через: netbird status"
