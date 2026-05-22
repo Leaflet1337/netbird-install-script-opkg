@@ -7,4 +7,4 @@
 Для запуска процесса установки и автоматической настройки выполните следующую команду в терминале вашего устройства:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/Leaflet1337/netbird-install-script-opkg/main/netbird-install-script-opkg.sh | sh
+curl -sSL https://raw.githubusercontent.com/Leaflet1337/netbird-install-script-opkg/main/netbird-install-script-opkg.sh | tr -d '\r' | sh
