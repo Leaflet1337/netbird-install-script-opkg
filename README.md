@@ -21,6 +21,7 @@ curl -sSL https://raw.githubusercontent.com/Leaflet1337/netbird-install-script-o
 1. Установлена и настроена среда **Entware** (на USB-флешку или во внутреннюю память роутера).
 2. В веб-интерфейсе Кинетика включен компонент **«WireGuard VPN»** (необходим для инициализации модуля `tun` в ядре).
 > <summary>**Справочник архитектур для подбора бинарника NetBird:**</summary>
+> </details>
 > 
 > - **Архитектура `mipsel`** (использовать архив `mipsel-installer.tar.gz`):
 >     
