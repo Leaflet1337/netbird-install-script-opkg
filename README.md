@@ -111,7 +111,7 @@ cat << 'EOF' > /opt/etc/netbird/config.json
 {
   "ManagementURL": {
     "Scheme": "https",
-    "Host": "netbird.um-ural.ru:443"
+    "Host": "ваш.домен.ru:443"
   },
   "AdminURL": {
     "Scheme": "https",
