@@ -20,8 +20,7 @@ curl -sSL https://raw.githubusercontent.com/Leaflet1337/netbird-install-script-o
 
 1. Установлена и настроена среда **Entware** (на USB-флешку или во внутреннюю память роутера).
 2. В веб-интерфейсе Кинетика включен компонент **«WireGuard VPN»** (необходим для инициализации модуля `tun` в ядре).
-> <summary>**Справочник архитектур для подбора бинарника NetBird:**</summary>
-> </details>
+> **Справочник архитектур для подбора бинарника NetBird:**
 > 
 > - **Архитектура `mipsel`** (использовать архив `mipsel-installer.tar.gz`):
 >     
@@ -34,7 +33,6 @@ curl -sSL https://raw.githubusercontent.com/Leaflet1337/netbird-install-script-o
 > - **Архитектура `aarch64`** (использовать архив `aarch64-installer.tar.gz`):
 >     
 >     Keenetic Peak (KN-2710), Ultra (KN-1811), Ultra (NC-1812), Giga (KN-1012), Hopper (KN-3811), Hopper SE (KN-3812).
->     </details>
 
 ## Пошаговая инструкция по настройке
 
