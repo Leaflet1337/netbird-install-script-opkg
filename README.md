@@ -10,7 +10,7 @@
 curl -sSL https://raw.githubusercontent.com/Leaflet1337/netbird-install-script-opkg/main/netbird-install-script-opkg.sh | tr -d '\r' > /tmp/nb.sh && sh /tmp/nb.sh && rm -f /tmp/nb.sh
 ```
 
-Эта техническая инструкция предназначена для ручного развертывания клиента NetBird на роутерах Keenetic (архитектура MIPS/MIPSLE/AARCH64, среда Entware).
+## Эта техническая инструкция предназначена для ручного развертывания клиента NetBird на роутерах Keenetic (архитектура MIPS/MIPSLE/AARCH64, среда Entware).
 
 В ней учтены все архитектурные конфликты KeeneticOS с фаерволом NetBird, особенности асимметричной маршрутизации (`rp_filter`), защита от зацикливания NDM и специфика синтаксиса встроенного пакета `xtables-multi` в Entware.
 
