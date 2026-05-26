@@ -217,10 +217,10 @@ read run_auth
 
 case "$run_auth" in
     [Yy]*)
-        printf "Введите Management URL [По умолчанию: https://netbird.um-ural.ru]: "
+        printf "Введите Management URL [По умолчанию: https://netbird.io]: "
         read user_url
         if [ -z "$user_url" ]; then
-            user_url="https://netbird.um-ural.ru"
+            user_url="https://netbird.io"
         fi
         
         printf "Введите ваш Setup Key: "
@@ -236,7 +236,7 @@ case "$run_auth" in
     *)
         echo "Вы отказались от немедленной авторизации."
         echo "Для завершения настройки выполните команду вручную в любое время:"
-        echo "netbird up --management-url https://netbird.um-ural.ru --setup-key ВАШ_КЛЮЧ"
+        echo "netbird up --management-url https://netbird.youdomain.com --setup-key SETUP_KEY"
         ;;
 esac
 
