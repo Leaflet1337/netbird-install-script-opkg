@@ -1,8 +1,8 @@
 #!/bin/sh
-# Автоматический скрипт развертывания NetBird для Keenetic (Entware)
-# Скрипт полностью автономен, ставит зависимости, лечит проблемы фаервола и зацикливания
+# Автоматический скрипт комплексного развертывания NetBird для Keenetic (Entware)
+# Включает: установку, фиксы фаервола, фоновый вачдог демона и пинг-проверку в cron
 
-# Завершение при ошибках
+# Завершение при критических ошибках
 set -e
 
 echo ""
@@ -12,18 +12,18 @@ echo "======================================================="
 echo ""
 
 # Шаг 1. Очистка старых сессий
-echo "[1/7] Проверка и очистка старых конфигураций..."
+echo "[1/8] Проверка и очистка старых конфигураций..."
 killall -9 netbird 2>/dev/null || true
 rm -rf /opt/var/lib/netbird/*
 rm -rf /opt/etc/netbird/*
 
 # Шаг 2. Установка пакетов
-echo "[2/7] Обновление репозиториев и установка iptables, netbird..."
+echo "[2/8] Обновление репозиториев и установка iptables, netbird..."
 opkg update
 opkg install iptables netbird
 
 # Шаг 3. Создание умного эмулятора iptables
-echo "[3/7] Конфигурация эмулятора iptables (обход конфликтов ядра)..."
+echo "[3/8] Конфигурация эмулятора iptables (обход конфликтов ядра)..."
 if [ ! -f /opt/sbin/iptables.real ]; then
     if [ -f /opt/sbin/iptables ]; then
         mv /opt/sbin/iptables /opt/sbin/iptables.real
@@ -56,7 +56,7 @@ EOF
 chmod +x /opt/sbin/iptables
 
 # Шаг 4. Создание базового config.json
-echo "[4/7] Генерация эталонного файла конфигурации config.json..."
+echo "[4/8] Генерация эталонного файла конфигурации config.json..."
 mkdir -p /opt/etc/netbird
 cat << 'EOF' > /opt/etc/netbird/config.json
 {
@@ -67,8 +67,8 @@ cat << 'EOF' > /opt/etc/netbird/config.json
 }
 EOF
 
-# Шаг 5. Создание демона автозапуска
-echo "[5/7] Установка скрипта инициализации демона S99netbird..."
+# Шаг 5. Создание демона автозапуска с фоновым Watchdog-процессом
+echo "[5/8] Установка модифицированного скрипта инициализации S99netbird..."
 cat << 'EOF' > /opt/etc/init.d/S99netbird
 #!/bin/sh
 ENABLED=yes
@@ -80,11 +80,27 @@ case "$1" in
         if [ "$ENABLED" = "yes" ]; then
             mkdir -p /opt/var/run
             export NB_DISABLE_FIREWALL=true
-            $PROG $ARGS &
+            
+            # Запускаем бесконечный цикл-страж в фоновом режиме
+            (
+                while true; do
+                    # Проверяем, запущен ли демон в данный момент
+                    if ! pidof netbird >/dev/null; then
+                        echo "$(date): NetBird daemon stopped. Restarting..." >> /opt/var/log/netbird_watchdog.log
+                        $PROG $ARGS >/dev/null 2>&1
+                    fi
+                    sleep 3
+                done
+            ) &
+            echo "NetBird watchdog service started."
         fi
         ;;
     stop)
-        killall netbird 2>/dev/null
+        # Сначала уничтожаем цикл-страж, чтобы он не перезапустил процесс принудительно
+        PID=$(pgrep -f "while true; do if ! pidof netbird")
+        [ -n "$PID" ] && kill -9 $PID 2>/dev/null
+        killall netbird 2>/dev/null || true
+        echo "NetBird service stopped."
         ;;
     restart)
         $0 stop
@@ -100,7 +116,7 @@ EOF
 chmod +x /opt/etc/init.d/S99netbird
 
 # Шаг 6. Настройка хука NDM netfilter.d с защитой от зацикливания
-echo "[6/7] Создание хука маршрутизации Keenetic с Lock-защитой..."
+echo "[6/8] Создание хука маршрутизации Keenetic с Lock-защитой..."
 mkdir -p /opt/etc/ndm/netfilter.d
 cat << 'EOF' > /opt/etc/ndm/netfilter.d/netbird.sh
 #!/bin/sh
@@ -135,7 +151,7 @@ EOF
 chmod +x /opt/etc/ndm/netfilter.d/netbird.sh
 
 # Шаг 7. Запуск служб и применение правил в реальном времени
-echo "[7/7] Включение форвардинга пакетов и запуск демона..."
+echo "[7/8] Включение форвардинга пакетов и запуск демона..."
 sysctl -w net.ipv4.ip_forward=1
 table=filter /opt/etc/ndm/netfilter.d/netbird.sh
 table=nat /opt/etc/ndm/netfilter.d/netbird.sh
@@ -149,7 +165,53 @@ echo "======================================================="
 sleep 5
 echo ""
 
-# Интерактивная часть для авторизации
+# Шаг 8. Интерактивная настройка пинг-контроля туннеля через Cron
+echo "[8/8] Интерактивная настройка планировщика cron..."
+DEFAULT_IP="100.64.0.1"
+printf "Введите IP-адрес пира NetBird для проверки доступности [По умолчанию: %s]: " "$DEFAULT_IP"
+read user_ip
+
+if [ -z "$user_ip" ]; then
+    TARGET_IP="$DEFAULT_IP"
+else
+    TARGET_IP="$user_ip"
+fi
+
+# Проверка и доустановка cron
+if ! opkg list-installed | grep -q '^cron\s'; then
+    echo "Пакет cron не найден. Доустанавливаем..."
+    opkg install cron
+fi
+
+# Генерируем скрипт проверки туннеля с подставленным IP (экранируем внутренние переменные)
+cat << EOF > /opt/etc/netbird/check_tunnel.sh
+#!/bin/sh
+# Скрипт автоматической проверки туннеля NetBird
+TARGET_IP="$TARGET_IP"
+
+if ! ping -c 3 -W 2 \$TARGET_IP > /dev/null 2>&1; then
+    echo "\$(date): Tunnel to \$TARGET_IP is down! Restarting NetBird..." >> /opt/var/log/netbird_cron.log
+    /opt/etc/init.d/S99netbird restart
+fi
+EOF
+chmod +x /opt/etc/netbird/check_tunnel.sh
+
+# Запись в crontab без дублирования
+CRON_JOB="*/5 * * * * /opt/etc/netbird/check_tunnel.sh"
+if [ -f /opt/etc/crontab ] && grep -q "/opt/etc/netbird/check_tunnel.sh" /opt/etc/crontab; then
+    sed -i '\#netbird/check_tunnel.sh#d' /opt/etc/crontab
+fi
+mkdir -p /opt/etc
+echo "$CRON_JOB" >> /opt/etc/crontab
+
+# Перезапуск cron службы
+if [ -f /opt/etc/init.d/S10cron ]; then
+    /opt/etc/init.d/S10cron restart
+fi
+echo "Проверка доступности туннеля ($TARGET_IP) активирована через cron."
+echo ""
+
+# Интерактивная часть для авторизации в сети
 printf "Хотите выполнить привязку к серверу прямо сейчас? [y/n]: "
 read run_auth
 
@@ -164,7 +226,7 @@ case "$run_auth" in
         printf "Введите ваш Setup Key: "
         read user_key
         if [ -z "$user_key" ]; then
-            echo "Ключ пустой. Настройка прервана."
+            echo "Ключ пустой. Авторизация пропущена."
             echo "Вы можете выполнить подключение позже вручную."
         else
             echo "Выполняется подключение к mesh-сети..."
