@@ -1,14 +1,3 @@
-# Скрипт автоматической установки NetBird c поддержкой маршрутизации
-
-Скрипт предназначен для быстрой настройки и развертывания клиента NetBird. Автоматически включает форвардинг пакетов на уровне ядра и применяет правила сетевого экрана (firewall).
-
-## Быстрая установка одной командой
-
-Для запуска процесса установки и автоматической настройки выполните следующую команду в терминале вашего устройства:
-
-```
-curl -sSL https://raw.githubusercontent.com/Leaflet1337/netbird-install-script-opkg/main/netbird-install-script-opkg.sh | tr -d '\r' > /tmp/nb.sh && sh /tmp/nb.sh && rm -f /tmp/nb.sh
-```
 
 ## Эта техническая инструкция предназначена для ручного развертывания клиента NetBird на роутерах Keenetic (архитектура MIPS/MIPSLE/AARCH64, среда Entware).
 
@@ -21,19 +10,31 @@ curl -sSL https://raw.githubusercontent.com/Leaflet1337/netbird-install-script-o
 1. Установлена и настроена среда **Entware** (на USB-флешку или во внутреннюю память роутера).
 2. В конфигах подразумевается стандартная сеть Netbird 100.64.0.0/10
 3. В веб-интерфейсе Кинетика включен компонент **«WireGuard VPN»** (необходим для инициализации модуля `tun` в ядре).
-> **Справочник архитектур для подбора бинарника NetBird:**
-> 
-> - **Архитектура `mipsel`** (использовать архив `mipsel-installer.tar.gz`):
->     
->     Keenetic 4G (KN-1212), Omni (KN-1410), Extra (KN-1710/1711/1713), Giga (KN-1010/1011), Ultra (KN-1810), Viva (KN-1910/1912/1913), Giant (KN-2610), Hero 4G (KN-2310/2311), Hopper (KN-3810). А также старые Zyxel Keenetic II / III, Extra / Extra II, Giga II / III, Omni / Omni II, Viva, Ultra / Ultra II.
->     
-> - **Архитектура `mips`** (использовать архив `mips-installer.tar.gz`):
->     
->     Keenetic Ultra SE (KN-2510), Giga SE (KN-2410), DSL (KN-2010), Skipper DSL (KN-2112), Duo (KN-2110), Hopper DSL (KN-3610). А также Zyxel Keenetic DSL, LTE, VOX.
->     
-> - **Архитектура `aarch64`** (использовать архив `aarch64-installer.tar.gz`):
->     
->     Keenetic Peak (KN-2710), Ultra (KN-1811), Ultra (NC-1812), Giga (KN-1012), Hopper (KN-3811), Hopper SE (KN-3812).
+
+<br>
+
+3. Теперь нужно установить репозиторий системы пакетов [Entware](https://forum.keenetic.net/topic/4299-entware/).
+
+> [!NOTE]
+> Для моделей Keenetic/Netcraze: 4G (KN-1212), Omni (KN-1410), Extra (KN-1710/1711/1713), Giga (KN-1010/1011), Ultra (KN-1810), Viva (KN-1910/1912/1913), Giant (KN-2610), Hero 4G (KN-2310/2311), Hopper (KN-3810) и Zyxel Keenetic II / III, Extra, Extra II, Giga II / III, Omni, Omni II, Viva, Ultra, Ultra II используйте для установки архив **mipsel** — [mipsel-installer.tar.gz](https://bin.entware.net/mipselsf-k3.4/installer/mipsel-installer.tar.gz)
+>
+> Для моделей Keenetic/Netcraze: Ultra SE (KN-2510), Giga SE (KN-2410), DSL (KN-2010), Skipper DSL (KN-2112), Duo (KN-2110), Ultra SE (KN-2510),  Hopper DSL (KN-3610) и Zyxel Keenetic DSL, LTE, VOX используйте для установки архив **mips** — [mips-installer.tar.gz](https://bin.entware.net/mipssf-k3.4/installer/mips-installer.tar.gz)
+>
+> Для моделей Keenetic/Netcraze: Peak (KN-2710), Ultra (KN-1811), Ultra (NC-1812), Giga (KN-1012), Hopper (KN-3811) и Hopper SE (KN-3812) используйте архив **aarch64** — [aarch64-installer.tar.gz](https://bin.entware.net/aarch64-k3.10/installer/aarch64-installer.tar.gz)
+
+<br>
+# Скрипт автоматической установки NetBird c поддержкой маршрутизации
+
+Скрипт предназначен для быстрой настройки и развертывания клиента NetBird. Автоматически включает форвардинг пакетов на уровне ядра и применяет правила сетевого экрана (firewall).
+
+## Быстрая установка одной командой
+
+Для запуска процесса установки и автоматической настройки выполните следующую команду в терминале вашего устройства:
+
+```
+curl -sSL https://raw.githubusercontent.com/Leaflet1337/netbird-install-script-opkg/main/netbird-install-script-opkg.sh | tr -d '\r' > /tmp/nb.sh && sh /tmp/nb.sh && rm -f /tmp/nb.sh
+```
+
 
 ## Пошаговая инструкция по настройке
 
