@@ -68,7 +68,7 @@ opkg update && opkg install iptables
 # 2. Переименовываем реальный бинарник iptables в iptables.real
 [ ! -f /opt/sbin/iptables.real ] && mv /opt/sbin/iptables /opt/sbin/iptables.real
 
-# 3. Создаем эмулятор-заглубку для NetBird
+# 3. Создаем эмулятор-заглушку для NetBird
 cat << 'EOF' > /opt/sbin/iptables
 #!/bin/sh
 # Эмулятор iptables для корректной работы NetBird CLI и Daemon в KeeneticOS
