@@ -8,12 +8,12 @@
 Перед началом настройки на роутере должны быть выполнены следующие действия:
 
 1. Установлена и настроена среда **Entware** (на USB-флешку или во внутреннюю память роутера).
-2. В конфигах подразумевается стандартная сеть Netbird 100.64.0.0/10
-3. В веб-интерфейсе Кинетика включен компонент **«WireGuard VPN»** (необходим для инициализации модуля `tun` в ядре).
-
+2. В веб-интерфейсе Кинетика включен компонент **«WireGuard VPN»** (необходим для инициализации модуля `tun` в ядре).
+   Используемая по умолчанию сеть Netbird - 100.64.0.0/10
+   
 <br>
 
-Теперь нужно установить репозиторий системы пакетов [Entware](https://forum.keenetic.net/topic/4299-entware/).
+Теперь нужно установить репозиторий системы пакетов [Entware]([https://forum.keenetic.net/topic/4299-entware/](https://support.netcraze.ru/ultra/nc-1812/ru/18482-installing-opkg-entware-in-the-router-s-internal-memory.html)).
 
 > [!NOTE]
 > Для моделей Keenetic/Netcraze: 4G (KN-1212), Omni (KN-1410), Extra (KN-1710/1711/1713), Giga (KN-1010/1011), Ultra (KN-1810), Viva (KN-1910/1912/1913), Giant (KN-2610), Hero 4G (KN-2310/2311), Hopper (KN-3810) и Zyxel Keenetic II / III, Extra, Extra II, Giga II / III, Omni, Omni II, Viva, Ultra, Ultra II используйте для установки архив **mipsel** — [mipsel-installer.tar.gz](https://bin.entware.net/mipselsf-k3.4/installer/mipsel-installer.tar.gz)
@@ -29,7 +29,12 @@
 
 ## Быстрая установка одной командой
 
-Для запуска процесса установки и автоматической настройки выполните следующую команду в терминале вашего устройства:
+Авторизвавшись в cli Entware установить пакет curl 
+```
+opkg install curl
+```
+
+Далее запустите процесс установки и автоматической настройки  следующей командой в терминале вашего устройства:
 
 ```
 curl -sSL https://raw.githubusercontent.com/Leaflet1337/netbird-install-script-opkg/main/netbird-install-script-opkg.sh | tr -d '\r' > /tmp/nb.sh && sh /tmp/nb.sh && rm -f /tmp/nb.sh
