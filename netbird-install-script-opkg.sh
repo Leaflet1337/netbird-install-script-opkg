@@ -20,7 +20,7 @@ rm -rf /opt/etc/netbird/*
 # Шаг 2. Установка пакетов
 echo "[2/8] Обновление репозиториев и установка iptables, netbird..."
 opkg update
-opkg install iptables netbird
+opkg install iptables netbird cron
 
 # Шаг 3. Создание умного эмулятора iptables
 echo "[3/8] Конфигурация эмулятора iptables (обход конфликтов ядра)..."
