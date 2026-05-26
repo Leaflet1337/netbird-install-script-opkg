@@ -23,7 +23,7 @@
 >
 > Для моделей Keenetic/Netcraze: Peak (KN-2710), Ultra (KN-1811), Ultra (NC-1812), Giga (KN-1012), Hopper (KN-3811) и Hopper SE (KN-3812) используйте архив **aarch64** — [aarch64-installer.tar.gz](https://bin.entware.net/aarch64-k3.10/installer/aarch64-installer.tar.gz)
 
-<br>
+
 ## Скрипт автоматической установки NetBird c поддержкой маршрутизации
 
 Скрипт предназначен для быстрой настройки и развертывания клиента NetBird. Автоматически включает форвардинг пакетов на уровне ядра и применяет правила сетевого экрана (firewall).
