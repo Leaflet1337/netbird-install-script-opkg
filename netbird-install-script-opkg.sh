@@ -15,6 +15,7 @@ BACKUP_DIR="/opt/backups/netbird"
 CONFIG_DIR="/opt/etc/netbird"
 NETBIRD_IFACE="${NETBIRD_IFACE:-wt0}"
 NETBIRD_NET="${NETBIRD_NET:-100.64.0.0/10}"
+WEB_PORT="${WEB_PORT:-8989}"
 DRY_RUN=false
 AUTO_MODE=false
 DEBUG=false
@@ -154,134 +155,6 @@ create_backup() {
     return 0
 }
 
-# Восстановление из резервной копии
-restore_backup() {
-    local backup_path="$1"
-    if [ ! -d "$backup_path" ]; then
-        log_error "Резервная копия не найдена: $backup_path"
-        return 1
-    fi
-    
-    log_info "Восстановление из резервной копии: $backup_path"
-    
-    if [ "$DRY_RUN" = true ]; then
-        log_info "[DRY-RUN] Восстановление конфигов"
-        return 0
-    fi
-    
-    # Останавливаем NetBird
-    /opt/etc/init.d/S99netbird stop 2>/dev/null || true
-    
-    # Восстанавливаем конфиги
-    if [ -d "$backup_path/netbird" ]; then
-        rm -rf "$CONFIG_DIR"
-        cp -r "$backup_path/netbird" "$CONFIG_DIR"
-    fi
-    
-    # Восстанавливаем iptables
-    if [ -f "$backup_path/iptables" ]; then
-        cp "$backup_path/iptables" "/opt/sbin/iptables"
-    fi
-    
-    # Восстанавливаем init-скрипт
-    if [ -f "$backup_path/S99netbird" ]; then
-        cp "$backup_path/S99netbird" "/opt/etc/init.d/S99netbird"
-        chmod +x "/opt/etc/init.d/S99netbird"
-    fi
-    
-    log_info "✓ Восстановление завершено"
-    return 0
-}
-
-# Проверка целостности бинарника
-verify_binary() {
-    local binary="$1"
-    local expected_sha="$2"
-    
-    if [ ! -f "$binary" ]; then
-        log_error "Бинарник не найден: $binary"
-        return 1
-    fi
-    
-    if [ -z "$expected_sha" ]; then
-        log_debug "Контрольная сумма не указана, пропускаем проверку"
-        return 0
-    fi
-    
-    log_debug "Проверка целостности: $binary"
-    local actual_sha=$(sha256sum "$binary" | cut -d' ' -f1)
-    
-    if [ "$actual_sha" != "$expected_sha" ]; then
-        log_error "Контрольная сумма не совпадает!"
-        log_error "  Ожидалось: $expected_sha"
-        log_error "  Получено: $actual_sha"
-        return 1
-    fi
-    
-    log_info "✓ Контрольная сумма совпадает"
-    return 0
-}
-
-# Проверка уникальности IP
-check_ip_uniqueness() {
-    local ip_to_check="$1"
-    
-    log_debug "Проверка уникальности IP: $ip_to_check"
-    
-    if [ "$DRY_RUN" = true ]; then
-        log_info "[DRY-RUN] Проверка IP $ip_to_check"
-        return 0
-    fi
-    
-    if command -v netbird >/dev/null 2>&1; then
-        local peers=$(netbird status --json 2>/dev/null | grep -o '"ip":"[^"]*"' | cut -d'"' -f4 | grep -v "^$")
-        for peer_ip in $peers; do
-            if [ "$peer_ip" = "$ip_to_check" ]; then
-                log_warn "⚠ IP $ip_to_check уже используется другим узлом!"
-                return 1
-            fi
-        done
-        log_info "✓ IP свободен"
-        return 0
-    else
-        log_debug "netbird не доступен, пропускаем проверку уникальности"
-        return 0
-    fi
-}
-
-# Автоматический подбор свободного IP
-find_free_ip() {
-    local base_ip="${1:-100.64.0.1}"
-    local start_num=$(echo "$base_ip" | cut -d'.' -f4)
-    local base_prefix=$(echo "$base_ip" | cut -d'.' -f1-3)
-    
-    if [ -z "$start_num" ] || [ -z "$base_prefix" ]; then
-        base_prefix="100.64.0"
-        start_num=1
-    fi
-    
-    log_info "Поиск свободного IP в подсети ${base_prefix}.0/24..."
-    
-    if [ "$DRY_RUN" = true ]; then
-        log_info "[DRY-RUN] Найден свободный IP: ${base_prefix}.${start_num}"
-        echo "${base_prefix}.${start_num}"
-        return 0
-    fi
-    
-    for i in $(seq "$start_num" 254); do
-        local test_ip="${base_prefix}.${i}"
-        if ! ping -c 1 -W 1 "$test_ip" >/dev/null 2>&1; then
-            log_info "✓ Найден свободный IP: $test_ip"
-            echo "$test_ip"
-            return 0
-        fi
-    done
-    
-    log_warn "Не найден свободный IP, использую ${base_prefix}.254"
-    echo "${base_prefix}.254"
-    return 0
-}
-
 # --- 3. Основные функции установки ---
 
 # Функция установки пакетов
@@ -289,7 +162,7 @@ install_packages() {
     log_info "Обновление репозиториев и установка пакетов..."
     
     if [ "$DRY_RUN" = true ]; then
-        log_info "[DRY-RUN] Будет выполнено: opkg update && opkg install iptables netbird cron"
+        log_info "[DRY-RUN] Будет выполнено: opkg update && opkg install iptables netbird cron uhttpd"
         return 0
     fi
     
@@ -298,7 +171,7 @@ install_packages() {
         return 1
     }
     
-    opkg install iptables netbird cron || {
+    opkg install iptables netbird cron uhttpd || {
         log_error "Не удалось установить пакеты"
         return 1
     }
@@ -371,13 +244,6 @@ configure_netbird() {
   "IFaceDiscover": false
 EOF
     
-    # Добавляем статический IP, если задан
-    if [ -n "$STATIC_IP" ]; then
-        cat << EOF >> "$CONFIG_DIR/config.json"
-  ,"Address": "$STATIC_IP"
-EOF
-    fi
-    
     # Добавляем имя устройства, если задано
     if [ -n "$DEVICE_NAME" ]; then
         cat << EOF >> "$CONFIG_DIR/config.json"
@@ -389,13 +255,6 @@ EOF
     if [ -n "$MTU_VALUE" ]; then
         cat << EOF >> "$CONFIG_DIR/config.json"
   ,"WgMTU": $MTU_VALUE
-EOF
-    fi
-    
-    # Добавляем DNS, если задан
-    if [ -n "$DNS_SERVER" ]; then
-        cat << EOF >> "$CONFIG_DIR/config.json"
-  ,"DnsPrimary": "$DNS_SERVER"
 EOF
     fi
     
@@ -552,6 +411,171 @@ EOF
     return 0
 }
 
+# Функция настройки веб-интерфейса
+setup_web_interface() {
+    log_info "Настройка веб-интерфейса на порту $WEB_PORT..."
+    
+    if [ "$DRY_RUN" = true ]; then
+        log_info "[DRY-RUN] Создание веб-интерфейса"
+        return 0
+    fi
+    
+    # Создаем директорию для веб-файлов
+    mkdir -p /opt/www/netbird
+    
+    # Создаем HTML страницу
+    cat << 'EOF' > /opt/www/netbird/index.html
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="refresh" content="10">
+    <title>NetBird Status</title>
+    <style>
+        body { font-family: 'Courier New', monospace; background: #1e1e1e; color: #d4d4d4; padding: 20px; margin: 0; }
+        .container { max-width: 900px; margin: 0 auto; }
+        h1 { color: #569cd6; border-bottom: 2px solid #569cd6; padding-bottom: 10px; }
+        .status-ok { color: #4ec9b0; }
+        .status-error { color: #f44747; }
+        .status-warning { color: #dcdcaa; }
+        .info { color: #9cdcfe; }
+        .label { color: #c586c0; }
+        pre { background: #2d2d2d; padding: 15px; border-radius: 5px; overflow: auto; border-left: 3px solid #569cd6; }
+        .footer { margin-top: 30px; color: #6a6a6a; font-size: 12px; text-align: center; }
+        .badge { display: inline-block; padding: 3px 8px; border-radius: 3px; font-size: 12px; }
+        .badge-ok { background: #4ec9b0; color: #1e1e1e; }
+        .badge-error { background: #f44747; color: #1e1e1e; }
+        .badge-warning { background: #dcdcaa; color: #1e1e1e; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔵 NetBird Status Monitor</h1>
+        <div id="status">
+            <p><span class="label">⏳ Загрузка...</span></p>
+        </div>
+        <div class="footer">
+            Обновляется каждые 10 секунд | NetBird Installer v3.0
+        </div>
+    </div>
+    <script>
+        function loadStatus() {
+            fetch('/status')
+                .then(r => r.text())
+                .then(data => {
+                    const lines = data.split('\n');
+                    let html = '<pre>';
+                    let statusClass = 'status-ok';
+                    
+                    lines.forEach(line => {
+                        if (line.includes('Статус:') && line.includes('Connected')) {
+                            html += '<span class="status-ok">' + line + '</span>\n';
+                            statusClass = 'status-ok';
+                        } else if (line.includes('Статус:') && line.includes('Disconnected')) {
+                            html += '<span class="status-error">' + line + '</span>\n';
+                            statusClass = 'status-error';
+                        } else if (line.includes('⚠')) {
+                            html += '<span class="status-warning">' + line + '</span>\n';
+                        } else if (line.includes('✓') || line.includes('✅')) {
+                            html += '<span class="status-ok">' + line + '</span>\n';
+                        } else if (line.includes('❌') || line.includes('Ошибка')) {
+                            html += '<span class="status-error">' + line + '</span>\n';
+                        } else if (line.includes('IP:') || line.includes('Имя:')) {
+                            html += '<span class="info">' + line + '</span>\n';
+                        } else {
+                            html += line + '\n';
+                        }
+                    });
+                    
+                    html += '</pre>';
+                    
+                    // Добавляем бейдж статуса
+                    const badgeHtml = '<span class="badge badge-' + 
+                        (statusClass === 'status-ok' ? 'ok' : 'error') + 
+                        '">' + 
+                        (statusClass === 'status-ok' ? '🟢 ONLINE' : '🔴 OFFLINE') + 
+                        '</span>';
+                    
+                    document.getElementById('status').innerHTML = badgeHtml + html;
+                })
+                .catch(err => {
+                    document.getElementById('status').innerHTML = '<p class="status-error">❌ Ошибка загрузки: ' + err + '</p>';
+                });
+        }
+        
+        // Загружаем сразу и каждые 10 секунд
+        loadStatus();
+        setInterval(loadStatus, 10000);
+    </script>
+</body>
+</html>
+EOF
+    
+    # Создаем CGI скрипт для статуса
+    mkdir -p /opt/www/cgi-bin
+    cat << 'EOF' > /opt/www/cgi-bin/status
+#!/bin/sh
+echo "Content-Type: text/plain"
+echo ""
+echo "=== NetBird Status ==="
+/opt/etc/netbird/status.sh 2>&1
+EOF
+    chmod +x /opt/www/cgi-bin/status
+    
+    # Настраиваем uhttpd
+    cat << EOF > /opt/etc/uhttpd.conf
+# NetBird Status Server
+list listen_http 0.0.0.0:$WEB_PORT
+option home /opt/www
+option cgi_prefix /cgi-bin
+option index_page index.html
+option no_daemon 0
+option max_requests 3
+option script_timeout 60
+option network_timeout 30
+option http_keepalive 20
+option rfc1918_filter 0
+option url_prefix /
+EOF
+    
+    # Создаем init-скрипт для uhttpd
+    cat << 'EOF' > /opt/etc/init.d/S80uhttpd
+#!/bin/sh
+ENABLED=yes
+PROG=/opt/sbin/uhttpd
+ARGS="-f /opt/etc/uhttpd.conf"
+
+case "$1" in
+    start)
+        if [ "$ENABLED" = "yes" ]; then
+            $PROG $ARGS &
+            echo "uhttpd web server started on port $WEB_PORT"
+        fi
+        ;;
+    stop)
+        killall uhttpd 2>/dev/null || true
+        echo "uhttpd web server stopped"
+        ;;
+    restart)
+        $0 stop
+        sleep 1
+        $0 start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+EOF
+    chmod +x /opt/etc/init.d/S80uhttpd
+    
+    # Запускаем веб-сервер
+    /opt/etc/init.d/S80uhttpd start
+    
+    log_info "✓ Веб-интерфейс доступен по адресу: http://$(hostname):$WEB_PORT"
+    return 0
+}
+
 # Функция настройки мониторинга
 setup_monitoring() {
     log_info "Настройка мониторинга..."
@@ -585,40 +609,6 @@ tail -n 10 /opt/var/log/netbird.log 2>/dev/null || echo "Лог не найде�
 EOF
     chmod +x "$CONFIG_DIR/status.sh"
     
-    # Экспорт метрик для мониторинга
-    cat << 'EOF' > "$CONFIG_DIR/metrics.sh"
-#!/bin/sh
-# Экспорт метрик для Prometheus/Node Exporter
-OUTPUT=""
-
-# Статус подключения
-if pidof netbird >/dev/null; then
-    OUTPUT="$OUTPUT\nnetbird_status 1"
-else
-    OUTPUT="$OUTPUT\nnetbird_status 0"
-fi
-
-# Uptime (в секундах)
-if [ -f /var/run/netbird.pid ]; then
-    PID=$(cat /var/run/netbird.pid 2>/dev/null)
-    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-        UPTIME=$(ps -o etimes= -p "$PID" 2>/dev/null | tr -d ' ')
-        [ -n "$UPTIME" ] && OUTPUT="$OUTPUT\nnetbird_uptime_seconds $UPTIME"
-    fi
-fi
-
-# Трафик интерфейса
-if [ -f "/sys/class/net/wt0/statistics/rx_bytes" ]; then
-    RX=$(cat /sys/class/net/wt0/statistics/rx_bytes 2>/dev/null)
-    TX=$(cat /sys/class/net/wt0/statistics/tx_bytes 2>/dev/null)
-    [ -n "$RX" ] && OUTPUT="$OUTPUT\nnetbird_rx_bytes $RX"
-    [ -n "$TX" ] && OUTPUT="$OUTPUT\nnetbird_tx_bytes $TX"
-fi
-
-echo -e "$OUTPUT" | grep -v '^$'
-EOF
-    chmod +x "$CONFIG_DIR/metrics.sh"
-    
     # Настройка ротации логов
     cat << 'EOF' >> /opt/etc/crontab
 # Ротация логов NetBird
@@ -627,143 +617,6 @@ EOF
     
     log_info "✓ Мониторинг настроен"
     return 0
-}
-
-# Функция настройки веб-интерфейса
-setup_web_interface() {
-    log_info "Настройка веб-интерфейса..."
-    
-    if [ "$DRY_RUN" = true ]; then
-        log_info "[DRY-RUN] Создание веб-интерфейса"
-        return 0
-    fi
-    
-    # Проверяем наличие веб-сервера
-    if [ ! -d "/www" ]; then
-        log_warn "Директория /www не найдена. Веб-интерфейс не будет настроен."
-        return 0
-    fi
-    
-    cat << 'EOF' > /www/netbird_status.html
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>NetBird Status</title>
-    <style>
-        body { font-family: monospace; background: #1e1e1e; color: #d4d4d4; padding: 20px; }
-        pre { background: #2d2d2d; padding: 15px; border-radius: 5px; overflow: auto; }
-        .status-ok { color: #4ec9b0; }
-        .status-error { color: #f44747; }
-        h1 { color: #569cd6; }
-    </style>
-</head>
-<body>
-    <h1>🔵 NetBird Status</h1>
-    <pre id="status">Загрузка...</pre>
-    <script>
-        setInterval(() => {
-            fetch('/cgi-bin/netbird_status.sh')
-                .then(r => r.text())
-                .then(data => {
-                    document.getElementById('status').textContent = data;
-                })
-                .catch(err => {
-                    document.getElementById('status').textContent = 'Ошибка загрузки: ' + err;
-                });
-        }, 5000);
-        // Первая загрузка
-        fetch('/cgi-bin/netbird_status.sh')
-            .then(r => r.text())
-            .then(data => {
-                document.getElementById('status').textContent = data;
-            });
-    </script>
-</body>
-</html>
-EOF
-    
-    # CGI скрипт для статуса
-    mkdir -p /www/cgi-bin
-    cat << 'EOF' > /www/cgi-bin/netbird_status.sh
-#!/bin/sh
-echo "Content-Type: text/plain"
-echo ""
-/opt/etc/netbird/status.sh 2>&1
-EOF
-    chmod +x /www/cgi-bin/netbird_status.sh
-    
-    log_info "✓ Веб-интерфейс доступен по адресу: http://$(hostname)/netbird_status.html"
-    return 0
-}
-
-# Функция настройки хуков
-setup_hooks() {
-    log_info "Настройка системы хуков..."
-    
-    if [ "$DRY_RUN" = true ]; then
-        log_info "[DRY-RUN] Создание директории hooks"
-        return 0
-    fi
-    
-    mkdir -p "$CONFIG_DIR/hooks"
-    
-    # Примеры хуков
-    cat << 'EOF' > "$CONFIG_DIR/hooks/pre_install.sh"
-#!/bin/sh
-# Хук: Выполняется ДО установки
-echo "Выполняется pre_install hook..."
-exit 0
-EOF
-    
-    cat << 'EOF' > "$CONFIG_DIR/hooks/post_install.sh"
-#!/bin/sh
-# Хук: Выполняется ПОСЛЕ установки
-echo "Выполняется post_install hook..."
-# Пример: настройка дополнительных маршрутов
-# ip route add 10.0.0.0/8 via 100.64.0.1 dev wt0
-exit 0
-EOF
-    
-    cat << 'EOF' > "$CONFIG_DIR/hooks/pre_start.sh"
-#!/bin/sh
-# Хук: Выполняется ПЕРЕД запуском демона
-echo "Выполняется pre_start hook..."
-exit 0
-EOF
-    
-    cat << 'EOF' > "$CONFIG_DIR/hooks/post_stop.sh"
-#!/bin/sh
-# Хук: Выполняется ПОСЛЕ остановки демона
-echo "Выполняется post_stop hook..."
-exit 0
-EOF
-    
-    chmod +x "$CONFIG_DIR/hooks/"*.sh
-    
-    log_info "✓ Хуки настроены"
-    return 0
-}
-
-# Функция выполнения хуков
-run_hook() {
-    local hook_name="$1"
-    local hook_path="$CONFIG_DIR/hooks/$hook_name.sh"
-    
-    if [ -f "$hook_path" ] && [ -x "$hook_path" ]; then
-        log_info "Выполнение хука: $hook_name"
-        if [ "$DRY_RUN" = true ]; then
-            log_info "[DRY-RUN] Будет выполнен хук: $hook_name"
-        else
-            "$hook_path"
-            local result=$?
-            if [ $result -ne 0 ]; then
-                log_warn "Хук $hook_name завершился с кодом $result"
-            fi
-        fi
-    else
-        log_debug "Хук $hook_name не найден или не исполняемый"
-    fi
 }
 
 # Функция настройки дополнительных инструментов
@@ -813,45 +666,6 @@ else
 fi
 EOF
     
-    # Скрипт изменения IP
-    cat << 'EOF' > "$CONFIG_DIR/change_ip.sh"
-#!/bin/sh
-echo "=== Изменение статического IP NetBird ==="
-echo ""
-
-if pidof netbird >/dev/null; then
-    /opt/etc/init.d/S99netbird stop
-    sleep 2
-fi
-
-printf "Введите новый статический IP (например, 100.64.0.10): "
-read new_ip
-
-if [ -z "$new_ip" ]; then
-    echo "IP не введен. Операция отменена."
-    exit 1
-fi
-
-if ! echo "$new_ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
-    echo "❌ Неверный формат IP!"
-    exit 1
-fi
-
-CONFIG_FILE="/opt/etc/netbird/config.json"
-cp "$CONFIG_FILE" "$CONFIG_FILE.bak.$(date +%Y%m%d_%H%M%S)"
-
-if grep -q '"Address"' "$CONFIG_FILE"; then
-    sed -i "s/\"Address\": \"[0-9.]*\"/\"Address\": \"$new_ip\"/g" "$CONFIG_FILE"
-else
-    sed -i "s/}/,\"Address\": \"$new_ip\"\n}/g" "$CONFIG_FILE"
-fi
-
-echo "✓ Конфигурация обновлена"
-
-/opt/etc/init.d/S99netbird start
-echo "Проверьте статус: netbird status"
-EOF
-    
     # Скрипт обновления
     cat << 'EOF' > "$CONFIG_DIR/update.sh"
 #!/bin/sh
@@ -877,7 +691,7 @@ fi
 echo "Обновление завершено"
 EOF
     
-    chmod +x "$CONFIG_DIR/"change_name.sh "$CONFIG_DIR/"change_ip.sh "$CONFIG_DIR/"update.sh
+    chmod +x "$CONFIG_DIR/"change_name.sh "$CONFIG_DIR/"update.sh
     
     log_info "✓ Дополнительные инструменты настроены"
     return 0
@@ -885,7 +699,7 @@ EOF
 
 # --- 4. Интерактивные блоки ---
 
-# Интерактивная настройка имени устройства (упрощенная версия)
+# Интерактивная настройка имени устройства
 interactive_name() {
     print_header "Настройка имени устройства"
     
@@ -917,37 +731,6 @@ interactive_name() {
     esac
 }
 
-# Интерактивная настройка статического IP
-interactive_ip() {
-    print_header "Настройка статического IP"
-    
-    printf "Хотите назначить статический IP? [y/n]: "
-    read assign_ip
-    
-    if [ "$assign_ip" = "y" ] || [ "$assign_ip" = "Y" ]; then
-        printf "Введите IP адрес (например, 100.64.0.10) [Enter для автоподбора]: "
-        read STATIC_IP
-        
-        if [ -z "$STATIC_IP" ]; then
-            STATIC_IP=$(find_free_ip)
-        elif ! echo "$STATIC_IP" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
-            log_error "Неверный формат IP, выполняю автоподбор..."
-            STATIC_IP=$(find_free_ip)
-        else
-            # Проверка уникальности
-            if ! check_ip_uniqueness "$STATIC_IP"; then
-                log_warn "IP занят, выполняю автоподбор..."
-                STATIC_IP=$(find_free_ip)
-            fi
-        fi
-        
-        log_info "✓ Статический IP: $STATIC_IP"
-    else
-        STATIC_IP=""
-        log_info "Статический IP не назначен"
-    fi
-}
-
 # Интерактивная настройка MTU
 interactive_mtu() {
     print_header "Настройка MTU"
@@ -973,49 +756,11 @@ interactive_mtu() {
     fi
 }
 
-# Интерактивная настройка дополнительных пакетов
-interactive_packages() {
-    print_header "Дополнительные пакеты"
-    
-    echo "Доступные дополнительные пакеты:"
-    echo "  1) tcpdump - диагностика сети"
-    echo "  2) nano - текстовый редактор"
-    echo "  3) htop - мониторинг процессов"
-    echo "  4) mtr - трассировка маршрута"
-    echo "  5) установить все"
-    echo "  6) пропустить"
-    printf "Выберите вариант [1-6]: "
-    read pkg_choice
-    
-    local pkgs=""
-    case "$pkg_choice" in
-        1) pkgs="tcpdump" ;;
-        2) pkgs="nano" ;;
-        3) pkgs="htop" ;;
-        4) pkgs="mtr" ;;
-        5) pkgs="tcpdump nano htop mtr" ;;
-        6) log_info "Дополнительные пакеты не будут установлены"; return 0 ;;
-        *) log_warn "Неверный выбор"; return 0 ;;
-    esac
-    
-    if [ -n "$pkgs" ]; then
-        log_info "Установка пакетов: $pkgs"
-        if [ "$DRY_RUN" = false ]; then
-            opkg install $pkgs || log_warn "Некоторые пакеты не установлены"
-        else
-            log_info "[DRY-RUN] Установка: $pkgs"
-        fi
-    fi
-}
-
 # --- 5. Функции управления ---
 
 # Основная установка
 main_install() {
     log_info "Начало установки NetBird v$VERSION"
-    
-    # Выполняем хуки
-    run_hook "pre_install"
     
     # Создаем бэкап
     create_backup || {
@@ -1050,9 +795,6 @@ main_install() {
     # Настраиваем веб-интерфейс
     setup_web_interface || return 1
     
-    # Настраиваем хуки
-    setup_hooks || return 1
-    
     # Настраиваем дополнительные инструменты
     setup_tools || return 1
     
@@ -1066,11 +808,49 @@ main_install() {
         log_info "[DRY-RUN] Запуск сервиса"
     fi
     
-    # Выполняем хуки
-    run_hook "post_install"
-    
     log_info "✅ Установка завершена успешно!"
     return 0
+}
+
+# Полный перезапуск всех зависимостей
+full_restart() {
+    print_header "Полный перезапуск NetBird и зависимостей"
+    
+    log_info "Остановка всех сервисов..."
+    
+    # Останавливаем веб-сервер
+    if [ -f /opt/etc/init.d/S80uhttpd ]; then
+        /opt/etc/init.d/S80uhttpd stop
+    fi
+    
+    # Останавливаем NetBird
+    if [ -f /opt/etc/init.d/S99netbird ]; then
+        /opt/etc/init.d/S99netbird stop
+    fi
+    
+    sleep 2
+    
+    log_info "Запуск всех сервисов..."
+    
+    # Запускаем NetBird
+    if [ -f /opt/etc/init.d/S99netbird ]; then
+        /opt/etc/init.d/S99netbird start
+    fi
+    
+    # Запускаем веб-сервер
+    if [ -f /opt/etc/init.d/S80uhttpd ]; then
+        /opt/etc/init.d/S80uhttpd start
+    fi
+    
+    # Применяем правила фаервола
+    if [ -f /opt/etc/ndm/netfilter.d/netbird.sh ]; then
+        table=filter /opt/etc/ndm/netfilter.d/netbird.sh
+        table=nat /opt/etc/ndm/netfilter.d/netbird.sh
+    fi
+    
+    log_info "✅ Все сервисы перезапущены!"
+    log_info "Проверьте статус: netbird status"
+    log_info "Веб-интерфейс: http://$(hostname):$WEB_PORT"
 }
 
 # Показать статус
@@ -1119,11 +899,9 @@ stop_service() {
         return 0
     fi
     
-    run_hook "pre_stop"
     /opt/etc/init.d/S99netbird stop 2>/dev/null || {
         log_warn "Не удалось остановить сервис"
     }
-    run_hook "post_stop"
 }
 
 # Запуск сервиса
@@ -1134,12 +912,10 @@ start_service() {
         return 0
     fi
     
-    run_hook "pre_start"
     /opt/etc/init.d/S99netbird start 2>/dev/null || {
         log_error "Не удалось запустить сервис"
         return 1
     }
-    run_hook "post_start"
 }
 
 # Перезапуск сервиса
@@ -1197,23 +973,26 @@ uninstall() {
     # Создаем бэкап перед удалением
     create_backup
     
-    # Останавливаем сервис
+    # Останавливаем сервисы
+    /opt/etc/init.d/S80uhttpd stop 2>/dev/null || true
     /opt/etc/init.d/S99netbird stop 2>/dev/null || true
     
     # Удаляем пакеты
-    opkg remove netbird 2>/dev/null || true
+    opkg remove netbird uhttpd 2>/dev/null || true
     
     # Удаляем конфиги
     rm -rf "$CONFIG_DIR"
     rm -rf /opt/var/lib/netbird
+    rm -rf /opt/www/netbird
     
     # Восстанавливаем iptables
     if [ -f /opt/sbin/iptables.real ]; then
         mv /opt/sbin/iptables.real /opt/sbin/iptables
     fi
     
-    # Удаляем init-скрипт
+    # Удаляем init-скрипты
     rm -f /opt/etc/init.d/S99netbird
+    rm -f /opt/etc/init.d/S80uhttpd
     
     # Удаляем хук
     rm -f /opt/etc/ndm/netfilter.d/netbird.sh
@@ -1230,80 +1009,87 @@ uninstall() {
 # --- 6. Интерактивное меню после установки ---
 
 post_install_menu() {
-    print_header "Дополнительные настройки"
-    
     while true; do
+        print_header "Меню управления NetBird"
+        
         echo "Доступные опции:"
         echo "  1) Показать статус"
         echo "  2) Показать логи"
         echo "  3) Изменить имя устройства"
-        echo "  4) Изменить статический IP"
+        echo "  4) Полный перезапуск всех сервисов"
         echo "  5) Обновить скрипт"
-        echo "  6) Настроить ротацию логов"
-        echo "  7) Установить дополнительные пакеты"
-        echo "  8) Экспорт метрик для мониторинга"
-        echo "  9) Веб-интерфейс"
-        echo "  10) Выход"
-        printf "Выберите опцию [1-10]: "
+        echo "  6) Перезапустить веб-интерфейс"
+        echo "  7) Показать информацию о веб-интерфейсе"
+        echo "  0) Выход"
+        echo ""
+        printf "Выберите опцию [0-7]: "
         read menu_choice
         
         case "$menu_choice" in
-            1) show_status ;;
-            2) show_logs ;;
-            3) 
+            1)
+                show_status
+                echo ""
+                printf "Нажмите Enter для продолжения..."
+                read dummy
+                ;;
+            2)
+                show_logs 50
+                echo ""
+                printf "Нажмите Enter для продолжения..."
+                read dummy
+                ;;
+            3)
                 if [ -f "$CONFIG_DIR/change_name.sh" ]; then
                     "$CONFIG_DIR/change_name.sh"
                 else
                     log_error "Скрипт изменения имени не найден"
                 fi
+                echo ""
+                printf "Нажмите Enter для продолжения..."
+                read dummy
                 ;;
             4)
-                if [ -f "$CONFIG_DIR/change_ip.sh" ]; then
-                    "$CONFIG_DIR/change_ip.sh"
-                else
-                    log_error "Скрипт изменения IP не найден"
-                fi
+                full_restart
+                echo ""
+                printf "Нажмите Enter для продолжения..."
+                read dummy
                 ;;
-            5) update_script ;;
+            5)
+                update_script
+                echo ""
+                printf "Нажмите Enter для продолжения..."
+                read dummy
+                ;;
             6)
-                if [ "$DRY_RUN" = false ]; then
-                    echo "Настройка ротации логов..."
-                    echo "0 0 * * * find /opt/var/log/ -name 'netbird*.log' -size +10M -exec mv {} {}.old \; -exec gzip {} \;" >> /opt/etc/crontab
-                    /opt/etc/init.d/S10cron restart 2>/dev/null || true
-                    log_info "✓ Ротация логов настроена"
+                if [ -f /opt/etc/init.d/S80uhttpd ]; then
+                    /opt/etc/init.d/S80uhttpd restart
+                    log_info "✓ Веб-интерфейс перезапущен"
                 else
-                    log_info "[DRY-RUN] Настройка ротации логов"
+                    log_error "Веб-интерфейс не настроен"
                 fi
+                echo ""
+                printf "Нажмите Enter для продолжения..."
+                read dummy
                 ;;
-            7) interactive_packages ;;
-            8)
-                if [ -f "$CONFIG_DIR/metrics.sh" ]; then
-                    echo "=== Метрики NetBird ==="
-                    "$CONFIG_DIR/metrics.sh"
-                    echo ""
-                    echo "Для интеграции с Prometheus добавьте в node_exporter:"
-                    echo "  --collector.textfile.directory=/opt/etc/netbird"
-                    echo "И создайте cron-задание для сохранения метрик:"
-                    echo "  */5 * * * * /opt/etc/netbird/metrics.sh > /opt/etc/netbird/metrics.prom"
-                fi
+            7)
+                echo "=== Информация о веб-интерфейсе ==="
+                echo "URL: http://$(hostname):$WEB_PORT"
+                echo "Порт: $WEB_PORT"
+                echo "Статус: $(pidof uhttpd >/dev/null && echo '✅ Запущен' || echo '❌ Остановлен')"
+                echo "Лог: /opt/var/log/uhttpd.log"
+                echo ""
+                printf "Нажмите Enter для продолжения..."
+                read dummy
                 ;;
-            9)
-                if [ -f "/www/netbird_status.html" ]; then
-                    echo "Веб-интерфейс доступен по адресу:"
-                    echo "  http://$(hostname)/netbird_status.html"
-                else
-                    log_warn "Веб-интерфейс не настроен"
-                fi
-                ;;
-            10)
+            0)
                 log_info "Выход из меню"
                 break
                 ;;
             *)
                 log_error "Неверный выбор"
+                sleep 1
                 ;;
         esac
-        echo ""
     done
 }
 
@@ -1313,15 +1099,17 @@ usage() {
     echo "NetBird Installer для Keenetic v$VERSION"
     echo ""
     echo "Использование:"
-    echo "  $0 [COMMAND] [OPTIONS]"
+    echo "  netbird [COMMAND] [OPTIONS]"
     echo ""
     echo "Команды:"
     echo "  install      - Установка NetBird (по умолчанию)"
     echo "  start        - Запустить сервис"
     echo "  stop         - Остановить сервис"
     echo "  restart      - Перезапустить сервис"
+    echo "  fullrestart  - Полный перезапуск всех сервисов"
     echo "  status       - Показать статус"
     echo "  logs         - Показать логи"
+    echo "  menu         - Показать интерактивное меню"
     echo "  update       - Обновить скрипт"
     echo "  uninstall    - Полное удаление"
     echo "  help         - Показать эту справку"
@@ -1332,15 +1120,17 @@ usage() {
     echo "  --debug      - Включить отладку"
     echo "  --quiet      - Минимальный вывод"
     echo "  --name NAME  - Имя устройства"
-    echo "  --ip IP      - Статический IP"
     echo "  --mtu MTU    - MTU интерфейса"
     echo "  --url URL    - Management URL"
     echo "  --key KEY    - Setup Key"
+    echo "  --port PORT  - Порт веб-интерфейса (по умолчанию: 8989)"
     echo ""
     echo "Примеры:"
-    echo "  $0 install --auto --name '10-Antipino' --ip 100.64.0.10"
-    echo "  $0 status"
-    echo "  $0 --dry-run install"
+    echo "  netbird install --auto --name '10-Antipino'"
+    echo "  netbird status"
+    echo "  netbird menu"
+    echo "  netbird fullrestart"
+    echo "  netbird --dry-run install"
 }
 
 parse_args() {
@@ -1348,7 +1138,7 @@ parse_args() {
     
     while [ $# -gt 0 ]; do
         case "$1" in
-            install|start|stop|restart|status|logs|update|uninstall|help)
+            install|start|stop|restart|fullrestart|status|logs|menu|update|uninstall|help)
                 COMMAND="$1"
                 shift
                 ;;
@@ -1372,10 +1162,6 @@ parse_args() {
                 DEVICE_NAME="$2"
                 shift 2
                 ;;
-            --ip)
-                STATIC_IP="$2"
-                shift 2
-                ;;
             --mtu)
                 MTU_VALUE="$2"
                 shift 2
@@ -1386,6 +1172,10 @@ parse_args() {
                 ;;
             --key)
                 SETUP_KEY="$2"
+                shift 2
+                ;;
+            --port)
+                WEB_PORT="$2"
                 shift 2
                 ;;
             *)
@@ -1406,17 +1196,16 @@ main() {
     fi
     
     # Проверяем, запущен ли скрипт от root
-    if [ "$(id -u)" -ne 0 ] && [ "$COMMAND" != "status" ] && [ "$COMMAND" != "logs" ] && [ "$COMMAND" != "help" ]; then
-        log_error "Скрипт должен быть запущен от root для выполнения команд, кроме status/logs"
+    if [ "$(id -u)" -ne 0 ] && [ "$COMMAND" != "status" ] && [ "$COMMAND" != "logs" ] && [ "$COMMAND" != "help" ] && [ "$COMMAND" != "menu" ]; then
+        log_error "Скрипт должен быть запущен от root для выполнения команд, кроме status/logs/menu"
         exit 1
     fi
     
     # Выполняем команду
     case "$COMMAND" in
         install)
-            if [ "$AUTO_MODE" = false ] && [ -z "$DEVICE_NAME" ] && [ -z "$STATIC_IP" ]; then
+            if [ "$AUTO_MODE" = false ] && [ -z "$DEVICE_NAME" ]; then
                 interactive_name
-                interactive_ip
                 interactive_mtu
             fi
             
@@ -1446,45 +1235,28 @@ main() {
                     fi
                     
                     if [ -n "$SETUP_KEY" ]; then
-                        # Базовые аргументы
                         AUTH_ARGS="--management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
                         
-                        # Проверяем поддержку --hostname (новый синтаксис)
                         if [ -n "$DEVICE_NAME" ]; then
                             if netbird up --help 2>&1 | grep -q -- "--hostname"; then
                                 AUTH_ARGS="$AUTH_ARGS --hostname \"$DEVICE_NAME\""
                                 log_info "Использую --hostname для имени устройства"
                             else
-                                # Имя уже в config.json, ничего не делаем
                                 log_info "Имя устройства будет взято из config.json"
                             fi
                         fi
                         
-                        # Выполняем подключение
                         log_info "Подключение к management серверу..."
                         eval "netbird up $AUTH_ARGS"
                         
-                        # Проверяем статус
                         if [ $? -eq 0 ]; then
                             log_info "✅ Подключение успешно!"
                             log_info "Проверьте статус: netbird status"
                         else
                             log_error "❌ Ошибка подключения!"
-                            log_info "Попробуйте подключиться вручную:"
-                            if [ -n "$DEVICE_NAME" ]; then
-                                echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\" --hostname \"$DEVICE_NAME\""
-                            else
-                                echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
-                            fi
                         fi
                     else
                         log_warn "Ключ не введен. Авторизация пропущена."
-                        log_info "Выполните позже:"
-                        if [ -n "$DEVICE_NAME" ]; then
-                            echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key YOUR_KEY --hostname \"$DEVICE_NAME\""
-                        else
-                            echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key YOUR_KEY"
-                        fi
                     fi
                 fi
                 
@@ -1500,11 +1272,17 @@ main() {
         restart)
             restart_service
             ;;
+        fullrestart)
+            full_restart
+            ;;
         status)
             show_status
             ;;
         logs)
             show_logs 100
+            ;;
+        menu)
+            post_install_menu
             ;;
         update)
             update_script
