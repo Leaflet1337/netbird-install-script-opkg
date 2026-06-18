@@ -1,12 +1,12 @@
 #!/bin/sh
 # ==========================================================
-# NetBird Installer для Keenetic v3.3 (С исправленной командой netbird)
+# NetBird Installer для Keenetic v3.4 (С исправлением для /opt/bin)
 # ==========================================================
 
 set -e
 
 # --- 1. Базовые настройки ---
-VERSION="3.3"
+VERSION="3.4"
 SCRIPT_NAME="netbird-install.sh"
 LOG_DIR="/opt/var/log/netbird"
 BACKUP_DIR="/opt/backups/netbird"
@@ -380,7 +380,7 @@ setup_web_interface() {
             <p><span class="info">⏳ Загрузка...</span></p>
         </div>
         <div class="footer">
-            Обновляется каждые 10 секунд | NetBird Installer v3.3
+            Обновляется каждые 10 секунд | NetBird Installer v3.4
         </div>
     </div>
     <script>
@@ -818,7 +818,7 @@ uninstall() {
     [ -f /opt/sbin/iptables.real ] && mv /opt/sbin/iptables.real /opt/sbin/iptables
     rm -f /opt/etc/init.d/S99netbird /opt/etc/init.d/S80lighttpd /opt/etc/ndm/netfilter.d/netbird.sh
     # Удаляем симлинк, если он есть
-    [ -L /usr/bin/netbird ] && rm -f /usr/bin/netbird
+    [ -L /opt/bin/netbird ] && rm -f /opt/bin/netbird
     sed -i '\#netbird#d' /opt/etc/crontab 2>/dev/null
     log_info "✅ NetBird полностью удален"
 }
@@ -925,7 +925,7 @@ post_install_menu() {
     done
 }
 
-# --- Функция установки симлинка для команды netbird ---
+# --- Функция установки симлинка для команды netbird (исправленная) ---
 setup_netbird_command() {
     log_info "Настройка команды 'netbird'..."
     [ "$DRY_RUN" = true ] && { log_info "[DRY-RUN] Создание симлинка"; return 0; }
@@ -933,21 +933,42 @@ setup_netbird_command() {
     # Определяем путь к текущему скрипту
     local script_path=$(readlink -f "$0" 2>/dev/null || echo "/opt/bin/netbird")
     
-    # Создаем симлинк в /usr/bin
-    if [ -f /usr/bin/netbird ] && [ ! -L /usr/bin/netbird ]; then
-        # Если существует реальный файл netbird (не симлинк) - перемещаем его
-        log_warn "Файл /usr/bin/netbird уже существует. Перемещаем в /usr/bin/netbird.bin"
-        mv /usr/bin/netbird /usr/bin/netbird.bin
+    # Используем /opt/bin (доступно для записи в Entware)
+    mkdir -p /opt/bin
+    
+    # Если есть старый симлинк - удаляем
+    [ -L /opt/bin/netbird ] && rm -f /opt/bin/netbird
+    
+    # Если существует реальный файл netbird (не симлинк) - перемещаем его
+    if [ -f /opt/bin/netbird ] && [ ! -L /opt/bin/netbird ]; then
+        log_warn "Файл /opt/bin/netbird уже существует. Перемещаем в /opt/bin/netbird.bin"
+        mv /opt/bin/netbird /opt/bin/netbird.bin
     fi
     
-    # Создаем симлинк
-    ln -sf "$script_path" /usr/bin/netbird
-    log_info "✓ Команда 'netbird' настроена"
+    # Создаем симлинк в /opt/bin
+    ln -sf "$script_path" /opt/bin/netbird
+    
+    # Проверяем, есть ли /opt/bin в PATH
+    if ! echo "$PATH" | grep -q "/opt/bin"; then
+        log_warn "/opt/bin не найден в PATH. Добавляем..."
+        # Добавляем в PATH для текущей сессии
+        export PATH="/opt/bin:$PATH"
+        # Добавляем в профиль для постоянного использования
+        mkdir -p /opt/etc
+        echo 'export PATH="/opt/bin:$PATH"' >> /opt/etc/profile
+        log_info "✓ /opt/bin добавлен в PATH"
+    fi
+    
+    log_info "✓ Команда 'netbird' настроена в /opt/bin/netbird"
     log_info "  Теперь можно использовать:"
     log_info "    netbird menu     - открыть меню"
     log_info "    netbird status   - показать статус"
     log_info "    netbird restart  - перезапустить сервис"
     log_info "    netbird install  - установка"
+    log_info ""
+    log_info "  Если команда 'netbird' не найдена, выполните:"
+    log_info "    export PATH=\"/opt/bin:\$PATH\""
+    log_info "  или перезайдите в терминал"
 }
 
 # --- Аргументы ---
@@ -1054,7 +1075,7 @@ main() {
         uninstall) 
             uninstall
             # Удаляем симлинк
-            [ -L /usr/bin/netbird ] && rm -f /usr/bin/netbird
+            [ -L /opt/bin/netbird ] && rm -f /opt/bin/netbird
             ;;
         help|*) usage ;;
     esac
