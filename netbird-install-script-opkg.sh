@@ -568,14 +568,14 @@ echo "=== NetBird Status ==="
 echo "Версия: $(netbird version 2>/dev/null || echo 'N/A')"
 echo "Статус: $(netbird status 2>/dev/null | head -1 || echo 'N/A')"
 echo ""
-echo "=== Интерфейс $NETBIRD_IFACE ==="
-ip addr show "$NETBIRD_IFACE" 2>/dev/null || echo "Интерфейс не найден"
+echo "=== Интерфейс wt0 ==="
+ip addr show wt0 2>/dev/null || echo "Интерфейс не найден"
 echo ""
 echo "=== Статистика интерфейса ==="
-ip -s link show "$NETBIRD_IFACE" 2>/dev/null | tail -n 4 || echo "N/A"
+ip -s link show wt0 2>/dev/null | tail -n 4 || echo "N/A"
 echo ""
 echo "=== Активные маршруты ==="
-ip route | grep "$NETBIRD_IFACE" || echo "Маршрутов нет"
+ip route | grep wt0 || echo "Маршрутов нет"
 echo ""
 echo "=== Текущий конфиг ==="
 cat /opt/etc/netbird/config.json 2>/dev/null | head -20
@@ -862,7 +862,7 @@ echo "Обновление пакетов..."
 opkg update && opkg upgrade netbird
 
 echo "Обновление скрипта..."
-SCRIPT_URL="https://raw.githubusercontent.com/your-repo/netbird-install-script-opkg/main/netbird-install-script-opkg.sh"
+SCRIPT_URL="https://raw.githubusercontent.com/Leaflet1337/netbird-install-script-opkg/main/netbird-install-script-opkg.sh"
 wget -O "/tmp/script_new.sh" "$SCRIPT_URL" 2>/dev/null || curl -o "/tmp/script_new.sh" "$SCRIPT_URL"
 
 if [ -f "/tmp/script_new.sh" ]; then
@@ -885,62 +885,36 @@ EOF
 
 # --- 4. Интерактивные блоки ---
 
-# Интерактивная настройка имени устройства
+# Интерактивная настройка имени устройства (упрощенная версия)
 interactive_name() {
     print_header "Настройка имени устройства"
     
     echo "Варианты действий:"
-    echo "  1) Выбрать из списка известных устройств"
-    echo "  2) Ввести имя вручную"
-    echo "  3) Использовать имя хоста (текущее: $(hostname))"
-    echo "  4) Пропустить (авто-генерация NetBird)"
-    printf "Выберите вариант [1-4]: "
+    echo "  1) Ввести имя вручную"
+    echo "  2) Использовать имя хоста (текущее: $(hostname))"
+    echo "  3) Пропустить (авто-генерация NetBird)"
+    printf "Выберите вариант [1-3]: "
     read name_option
     
     case "$name_option" in
         1)
-            echo ""
-            echo "Известные устройства:"
-            echo "  1) 10-Antipino"
-            echo "  2) 00-Druzhby"
-            echo "  3) 04-kurgan"
-            echo "  4) DESKTOP-04097GC"
-            echo "  5) 24-talica"
-            echo "  6) Ввести вручную"
-            printf "Выберите номер [1-6]: "
-            read device_num
-            
-            case "$device_num" in
-                1) DEVICE_NAME="10-Antipino" ;;
-                2) DEVICE_NAME="00-Druzhby" ;;
-                3) DEVICE_NAME="04-kurgan" ;;
-                4) DEVICE_NAME="DESKTOP-04097GC" ;;
-                5) DEVICE_NAME="24-talica" ;;
-                6) 
-                    printf "Введите имя: "
-                    read DEVICE_NAME
-                    ;;
-                *) 
-                    DEVICE_NAME=$(hostname)
-                    log_warn "Неверный выбор, использую имя хоста"
-                    ;;
-            esac
-            ;;
-        2)
             printf "Введите имя устройства: "
             read DEVICE_NAME
+            if [ -z "$DEVICE_NAME" ]; then
+                DEVICE_NAME=$(hostname)
+                log_warn "Имя не введено, использую имя хоста"
+            fi
+            log_info "✓ Имя устройства: $DEVICE_NAME"
             ;;
-        3)
+        2)
             DEVICE_NAME=$(hostname)
-            log_info "Использую имя хоста: $DEVICE_NAME"
+            log_info "✓ Использую имя хоста: $DEVICE_NAME"
             ;;
         *)
             DEVICE_NAME=""
             log_info "Имя не задано (будет сгенерировано автоматически)"
             ;;
     esac
-    
-    [ -n "$DEVICE_NAME" ] && log_info "✓ Имя устройства: $DEVICE_NAME"
 }
 
 # Интерактивная настройка статического IP
@@ -1020,7 +994,8 @@ interactive_packages() {
         3) pkgs="htop" ;;
         4) pkgs="mtr" ;;
         5) pkgs="tcpdump nano htop mtr" ;;
-        *) log_info "Дополнительные пакеты не будут установлены"; return 0 ;;
+        6) log_info "Дополнительные пакеты не будут установлены"; return 0 ;;
+        *) log_warn "Неверный выбор"; return 0 ;;
     esac
     
     if [ -n "$pkgs" ]; then
@@ -1437,62 +1412,81 @@ main() {
     fi
     
     # Выполняем команду
-# --- Блок авторизации (исправленный) ---
-if [ "$run_auth" = "y" ] || [ "$run_auth" = "Y" ]; then
-    if [ -z "$MANAGEMENT_URL" ]; then
-        printf "Введите Management URL [По умолчанию: https://netbird.io]: "
-        read MANAGEMENT_URL
-        [ -z "$MANAGEMENT_URL" ] && MANAGEMENT_URL="https://netbird.io"
-    fi
-    
-    if [ -z "$SETUP_KEY" ]; then
-        printf "Введите Setup Key: "
-        read SETUP_KEY
-    fi
-    
-    if [ -n "$SETUP_KEY" ]; then
-        # Базовые аргументы
-        AUTH_ARGS="--management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
-        
-        # Проверяем, как задавать имя устройства
-        if [ -n "$DEVICE_NAME" ]; then
-            # Проверяем поддержку --hostname (новый синтаксис)
-            if netbird up --help 2>&1 | grep -q -- "--hostname"; then
-                AUTH_ARGS="$AUTH_ARGS --hostname \"$DEVICE_NAME\""
-                log_info "Использую --hostname для имени устройства"
-            else
-                # Имя уже в config.json, ничего не делаем
-                log_info "Имя устройства будет взято из config.json"
+    case "$COMMAND" in
+        install)
+            if [ "$AUTO_MODE" = false ] && [ -z "$DEVICE_NAME" ] && [ -z "$STATIC_IP" ]; then
+                interactive_name
+                interactive_ip
+                interactive_mtu
             fi
-        fi
-        
-        # Выполняем подключение
-        log_info "Подключение к management серверу..."
-        eval "netbird up $AUTH_ARGS"
-        
-        # Проверяем статус
-        if [ $? -eq 0 ]; then
-            log_info "✅ Подключение успешно!"
-            log_info "Проверьте статус: netbird status"
-        else
-            log_error "❌ Ошибка подключения!"
-            log_info "Попробуйте подключиться вручную:"
-            if [ -n "$DEVICE_NAME" ]; then
-                echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\" --hostname \"$DEVICE_NAME\""
-            else
-                echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
+            
+            # Проверяем management URL, если указан
+            if [ -n "$MANAGEMENT_URL" ]; then
+                check_management_url "$MANAGEMENT_URL"
             fi
-        fi
-    else
-        log_warn "Ключ не введен. Авторизация пропущена."
-        log_info "Выполните позже:"
-        if [ -n "$DEVICE_NAME" ]; then
-            echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key YOUR_KEY --hostname \"$DEVICE_NAME\""
-        else
-            echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key YOUR_KEY"
-        fi
-    fi
-fi
+            
+            main_install
+            
+            if [ "$AUTO_MODE" = false ] && [ "$DRY_RUN" = false ]; then
+                # Запрос на авторизацию
+                print_header "Авторизация в сети"
+                printf "Хотите выполнить привязку к серверу? [y/n]: "
+                read run_auth
+                
+                if [ "$run_auth" = "y" ] || [ "$run_auth" = "Y" ]; then
+                    if [ -z "$MANAGEMENT_URL" ]; then
+                        printf "Введите Management URL [По умолчанию: https://netbird.io]: "
+                        read MANAGEMENT_URL
+                        [ -z "$MANAGEMENT_URL" ] && MANAGEMENT_URL="https://netbird.io"
+                    fi
+                    
+                    if [ -z "$SETUP_KEY" ]; then
+                        printf "Введите Setup Key: "
+                        read SETUP_KEY
+                    fi
+                    
+                    if [ -n "$SETUP_KEY" ]; then
+                        # Базовые аргументы
+                        AUTH_ARGS="--management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
+                        
+                        # Проверяем поддержку --hostname (новый синтаксис)
+                        if [ -n "$DEVICE_NAME" ]; then
+                            if netbird up --help 2>&1 | grep -q -- "--hostname"; then
+                                AUTH_ARGS="$AUTH_ARGS --hostname \"$DEVICE_NAME\""
+                                log_info "Использую --hostname для имени устройства"
+                            else
+                                # Имя уже в config.json, ничего не делаем
+                                log_info "Имя устройства будет взято из config.json"
+                            fi
+                        fi
+                        
+                        # Выполняем подключение
+                        log_info "Подключение к management серверу..."
+                        eval "netbird up $AUTH_ARGS"
+                        
+                        # Проверяем статус
+                        if [ $? -eq 0 ]; then
+                            log_info "✅ Подключение успешно!"
+                            log_info "Проверьте статус: netbird status"
+                        else
+                            log_error "❌ Ошибка подключения!"
+                            log_info "Попробуйте подключиться вручную:"
+                            if [ -n "$DEVICE_NAME" ]; then
+                                echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\" --hostname \"$DEVICE_NAME\""
+                            else
+                                echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
+                            fi
+                        fi
+                    else
+                        log_warn "Ключ не введен. Авторизация пропущена."
+                        log_info "Выполните позже:"
+                        if [ -n "$DEVICE_NAME" ]; then
+                            echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key YOUR_KEY --hostname \"$DEVICE_NAME\""
+                        else
+                            echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key YOUR_KEY"
+                        fi
+                    fi
+                fi
                 
                 post_install_menu
             fi
