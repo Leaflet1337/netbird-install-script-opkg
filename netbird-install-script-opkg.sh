@@ -1,12 +1,12 @@
 #!/bin/sh
 # ==========================================================
-# NetBird Installer для Keenetic v3.4 (С исправлением для /opt/bin)
+# NetBird Installer для Keenetic v3.5 (С исправлением UTF-8)
 # ==========================================================
 
 set -e
 
 # --- 1. Базовые настройки ---
-VERSION="3.4"
+VERSION="3.5"
 SCRIPT_NAME="netbird-install.sh"
 LOG_DIR="/opt/var/log/netbird"
 BACKUP_DIR="/opt/backups/netbird"
@@ -51,6 +51,13 @@ print_header() {
     echo "  $1"
     echo "======================================================="
     echo ""
+}
+
+# --- Очистка имени устройства ---
+sanitize_device_name() {
+    local name="$1"
+    # Оставляем только латиницу, цифры, дефис и подчеркивание
+    echo "$name" | tr -cd 'A-Za-z0-9-_.' | tr ' ' '_'
 }
 
 # --- Вспомогательные функции ---
@@ -209,7 +216,12 @@ configure_netbird() {
 EOF
     
     if [ -n "$DEVICE_NAME" ]; then
-        echo "  ,\"Name\": \"$DEVICE_NAME\"" >> "$CONFIG_DIR/config.json"
+        # Очищаем имя перед записью в конфиг
+        SANITIZED_NAME=$(sanitize_device_name "$DEVICE_NAME")
+        echo "  ,\"Name\": \"$SANITIZED_NAME\"" >> "$CONFIG_DIR/config.json"
+        if [ "$SANITIZED_NAME" != "$DEVICE_NAME" ]; then
+            log_warn "Имя очищено: $DEVICE_NAME → $SANITIZED_NAME"
+        fi
     fi
     
     if [ -n "$MTU_VALUE" ]; then
@@ -380,7 +392,7 @@ setup_web_interface() {
             <p><span class="info">⏳ Загрузка...</span></p>
         </div>
         <div class="footer">
-            Обновляется каждые 10 секунд | NetBird Installer v3.4
+            Обновляется каждые 10 секунд | NetBird Installer v3.5
         </div>
     </div>
     <script>
@@ -574,9 +586,11 @@ if ! pidof netbird >/dev/null; then
     exit 1
 fi
 echo "Текущее имя: $(netbird status 2>/dev/null | grep 'Name' | cut -d: -f2 | xargs || echo 'N/A')"
-printf "Введите новое имя: "
+printf "Введите новое имя (только латиница, цифры, - и _): "
 read new_name
 [ -z "$new_name" ] && { echo "Имя не может быть пустым!"; exit 1; }
+# Очищаем имя
+new_name=$(echo "$new_name" | tr -cd 'A-Za-z0-9-_.' | tr ' ' '_')
 printf "Продолжить? [y/n]: "
 read confirm
 if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
@@ -613,6 +627,7 @@ EOF
 # --- Интерактивные блоки ---
 interactive_name() {
     print_header "Настройка имени устройства"
+    echo "⚠️  Имя должно содержать только латиницу, цифры, - и _"
     echo "  1) Ввести имя вручную"
     echo "  2) Использовать имя хоста (текущее: $(hostname))"
     echo "  3) Пропустить"
@@ -622,12 +637,17 @@ interactive_name() {
         1)
             printf "Введите имя устройства: "
             read DEVICE_NAME
-            [ -z "$DEVICE_NAME" ] && DEVICE_NAME=$(hostname)
+            # Очищаем имя сразу
+            DEVICE_NAME=$(sanitize_device_name "$DEVICE_NAME")
+            if [ -z "$DEVICE_NAME" ]; then
+                DEVICE_NAME=$(sanitize_device_name "$(hostname)")
+                log_warn "Имя очищено и будет использовано имя хоста: $DEVICE_NAME"
+            fi
             log_info "✓ Имя устройства: $DEVICE_NAME"
             ;;
         2)
-            DEVICE_NAME=$(hostname)
-            log_info "✓ Использую имя хоста: $DEVICE_NAME"
+            DEVICE_NAME=$(sanitize_device_name "$(hostname)")
+            log_info "✓ Использую имя хоста (очищено): $DEVICE_NAME"
             ;;
         *)
             DEVICE_NAME=""
@@ -925,7 +945,7 @@ post_install_menu() {
     done
 }
 
-# --- Функция установки симлинка для команды netbird (исправленная) ---
+# --- Функция установки симлинка для команды netbird ---
 setup_netbird_command() {
     log_info "Настройка команды 'netbird'..."
     [ "$DRY_RUN" = true ] && { log_info "[DRY-RUN] Создание симлинка"; return 0; }
@@ -981,7 +1001,7 @@ usage() {
     echo "  --auto       - Автоматический режим"
     echo "  --debug      - Режим отладки"
     echo "  --quiet      - Минимальный вывод"
-    echo "  --name NAME  - Имя устройства"
+    echo "  --name NAME  - Имя устройства (только латиница, цифры, - и _)"
     echo "  --mtu MTU    - MTU интерфейса"
     echo "  --url URL    - Management URL"
     echo "  --key KEY    - Setup Key"
@@ -1001,7 +1021,11 @@ parse_args() {
             --auto) AUTO_MODE=true; shift ;;
             --debug) DEBUG=true; shift ;;
             --quiet) QUIET=true; shift ;;
-            --name) DEVICE_NAME="$2"; shift 2 ;;
+            --name) 
+                DEVICE_NAME=$(sanitize_device_name "$2")
+                log_info "Имя очищено: $2 → $DEVICE_NAME"
+                shift 2 
+                ;;
             --mtu) MTU_VALUE="$2"; shift 2 ;;
             --url) MANAGEMENT_URL="$2"; shift 2 ;;
             --key) SETUP_KEY="$2"; shift 2 ;;
@@ -1045,20 +1069,54 @@ main() {
                         read MANAGEMENT_URL
                         [ -z "$MANAGEMENT_URL" ] && MANAGEMENT_URL="https://netbird.io"
                     fi
+                    # Очищаем URL
+                    MANAGEMENT_URL=$(echo "$MANAGEMENT_URL" | tr -d ' ')
+                    
                     if [ -z "$SETUP_KEY" ]; then
                         printf "Введите Setup Key: "
                         read SETUP_KEY
                     fi
+                    # Очищаем ключ
+                    SETUP_KEY=$(echo "$SETUP_KEY" | tr -d ' ' | tr -d '\r' | tr -d '\n')
+                    
                     if [ -n "$SETUP_KEY" ]; then
+                        # Формируем команду с очищенным именем
                         AUTH_ARGS="--management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
-                        if [ -n "$DEVICE_NAME" ]; then
-                            if netbird up --help 2>&1 | grep -q -- "--hostname"; then
-                                AUTH_ARGS="$AUTH_ARGS --hostname \"$DEVICE_NAME\""
-                            else
-                                log_info "Имя будет взято из config.json"
+                        
+                        # Проверяем поддержку --hostname
+                        if netbird up --help 2>&1 | grep -q -- "--hostname"; then
+                            if [ -n "$DEVICE_NAME" ]; then
+                                SANITIZED_NAME=$(sanitize_device_name "$DEVICE_NAME")
+                                AUTH_ARGS="$AUTH_ARGS --hostname \"$SANITIZED_NAME\""
+                                log_info "Использую --hostname для имени устройства: $SANITIZED_NAME"
                             fi
+                        elif netbird up --help 2>&1 | grep -q -- "--name"; then
+                            if [ -n "$DEVICE_NAME" ]; then
+                                SANITIZED_NAME=$(sanitize_device_name "$DEVICE_NAME")
+                                AUTH_ARGS="$AUTH_ARGS --name \"$SANITIZED_NAME\""
+                                log_info "Использую --name для имени устройства: $SANITIZED_NAME"
+                            fi
+                        else
+                            log_info "Имя будет взято из config.json"
                         fi
-                        eval "netbird up $AUTH_ARGS" && log_info "✅ Подключено!" || log_error "❌ Ошибка подключения!"
+                        
+                        log_info "Подключение к management серверу: $MANAGEMENT_URL"
+                        log_info "Setup Key: ${SETUP_KEY:0:8}... (скрыто)"
+                        
+                        # Выполняем подключение с увеличенным таймаутом
+                        eval "netbird up $AUTH_ARGS --timeout 120" || {
+                            log_error "❌ Ошибка подключения!"
+                            log_info "Попробуйте альтернативный способ:"
+                            log_info "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
+                            log_info ""
+                            log_info "Если ошибка повторяется, проверьте:"
+                            log_info "  1. Доступность сервера: curl -v $MANAGEMENT_URL"
+                            log_info "  2. Корректность Setup Key"
+                            log_info "  3. Имя устройства содержит только латиницу и цифры"
+                            log_info "  4. Попробуйте подключиться без имени: netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
+                        }
+                    else
+                        log_warn "Ключ не введен. Авторизация пропущена."
                     fi
                 fi
                 post_install_menu
