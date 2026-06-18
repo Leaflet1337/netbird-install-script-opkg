@@ -1470,10 +1470,18 @@ main() {
                         read SETUP_KEY
                     fi
                     
-                    if [ -n "$SETUP_KEY" ]; then
-                        AUTH_CMD="netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
-                        [ -n "$DEVICE_NAME" ] && AUTH_CMD="$AUTH_CMD --name \"$DEVICE_NAME\""
-                        eval "$AUTH_CMD"
+ if netbird up --help 2>&1 | grep -q -- "--hostname"; then
+        AUTH_CMD="netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\" --hostname \"$DEVICE_NAME\""
+    else
+        # Просто подключаемся, имя уже в config.json
+        AUTH_CMD="netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
+        log_info "Имя будет взято из config.json"
+    fi
+else
+    AUTH_CMD="netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
+fi
+
+eval "$AUTH_CMD"
                     else
                         log_warn "Ключ не введен. Авторизация пропущена."
                     fi
