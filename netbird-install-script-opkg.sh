@@ -1,14 +1,12 @@
 #!/bin/sh
 # ==========================================================
-# NetBird Installer для Keenetic v4.0 (Финальная версия)
+# NetBird Installer для Keenetic v4.1 (С исправленным вводом)
 # ==========================================================
-# Установка NetBird на Keenetic (Entware)
-# Без веб-сервера, только необходимый минимум
 
 set -e
 
 # --- 1. Базовые настройки ---
-VERSION="4.0"
+VERSION="4.1"
 SCRIPT_NAME="netbird-install.sh"
 LOG_DIR="/opt/var/log/netbird"
 BACKUP_DIR="/opt/backups/netbird"
@@ -18,7 +16,6 @@ AUTO_MODE=false
 DEBUG=false
 QUIET=false
 
-# Определяем путь к скрипту
 SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null || echo "/opt/bin/netbird")
 
 # --- Цвета ---
@@ -52,7 +49,6 @@ print_header() {
     echo ""
 }
 
-# --- Очистка имени устройства ---
 sanitize_device_name() {
     local name="$1"
     echo "$name" | tr -cd 'A-Za-z0-9-_.' | tr ' ' '_'
@@ -558,7 +554,6 @@ post_install_menu() {
     done
 }
 
-# --- Функция установки симлинка для команды netbird ---
 setup_netbird_command() {
     log_info "Настройка команды 'netbird'..."
     [ "$DRY_RUN" = true ] && { log_info "[DRY-RUN] Создание симлинка"; return 0; }
@@ -661,21 +656,25 @@ main() {
             if [ "$AUTO_MODE" = false ] && [ "$DRY_RUN" = false ]; then
                 print_header "Авторизация в сети"
                 printf "Выполнить привязку к серверу? [y/n]: "
-                read run_auth
+                read run_auth </dev/tty
+                
                 if [ "$run_auth" = "y" ] || [ "$run_auth" = "Y" ]; then
+                    echo ""
                     if [ -z "$MANAGEMENT_URL" ]; then
                         printf "Введите Management URL [По умолчанию: https://netbird.io]: "
-                        read MANAGEMENT_URL
+                        read MANAGEMENT_URL </dev/tty
                         [ -z "$MANAGEMENT_URL" ] && MANAGEMENT_URL="https://netbird.io"
                     fi
                     MANAGEMENT_URL=$(echo "$MANAGEMENT_URL" | tr -d ' ')
                     
+                    echo ""
                     if [ -z "$SETUP_KEY" ]; then
                         printf "Введите Setup Key: "
-                        read SETUP_KEY
+                        read SETUP_KEY </dev/tty
                     fi
                     SETUP_KEY=$(echo "$SETUP_KEY" | tr -d ' ' | tr -d '\r' | tr -d '\n')
                     
+                    echo ""
                     if [ -n "$SETUP_KEY" ]; then
                         AUTH_ARGS="--management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
                         
@@ -691,17 +690,19 @@ main() {
                         
                         log_info "Подключение к management серверу: $MANAGEMENT_URL"
                         log_info "Setup Key: ${SETUP_KEY:0:8}... (скрыто)"
+                        echo ""
                         
                         eval "netbird up $AUTH_ARGS --timeout 120" || {
                             log_error "❌ Ошибка подключения!"
+                            echo ""
                             log_info "Попробуйте вручную:"
-                            log_info "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
-                            log_info ""
+                            echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
+                            echo ""
                             log_info "Если ошибка повторяется, проверьте:"
-                            log_info "  1. Доступность сервера: curl -v $MANAGEMENT_URL"
-                            log_info "  2. Корректность Setup Key"
-                            log_info "  3. Попробуйте подключиться без имени:"
-                            log_info "     netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
+                            echo "  1. Доступность сервера: curl -v $MANAGEMENT_URL"
+                            echo "  2. Корректность Setup Key"
+                            echo "  3. Попробуйте подключиться без имени:"
+                            echo "     netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
                         }
                     else
                         log_warn "Ключ не введен. Авторизация пропущена."
@@ -726,7 +727,6 @@ main() {
     esac
 }
 
-# --- Запуск ---
 SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null || echo "/opt/bin/netbird")
 
 parse_args "$@"
