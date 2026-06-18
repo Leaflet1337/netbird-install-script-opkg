@@ -1437,55 +1437,62 @@ main() {
     fi
     
     # Выполняем команду
-    case "$COMMAND" in
-        install)
-            if [ "$AUTO_MODE" = false ] && [ -z "$DEVICE_NAME" ] && [ -z "$STATIC_IP" ]; then
-                interactive_name
-                interactive_ip
-                interactive_mtu
-            fi
-            
-            # Проверяем management URL, если указан
-            if [ -n "$MANAGEMENT_URL" ]; then
-                check_management_url "$MANAGEMENT_URL"
-            fi
-            
-            main_install
-            
-            if [ "$AUTO_MODE" = false ] && [ "$DRY_RUN" = false ]; then
-                # Запрос на авторизацию
-                print_header "Авторизация в сети"
-                printf "Хотите выполнить привязку к серверу? [y/n]: "
-                read run_auth
-                
-                if [ "$run_auth" = "y" ] || [ "$run_auth" = "Y" ]; then
-                    if [ -z "$MANAGEMENT_URL" ]; then
-                        printf "Введите Management URL [По умолчанию: https://netbird.io]: "
-                        read MANAGEMENT_URL
-                        [ -z "$MANAGEMENT_URL" ] && MANAGEMENT_URL="https://netbird.io"
-                    fi
-                    
-                    if [ -z "$SETUP_KEY" ]; then
-                        printf "Введите Setup Key: "
-                        read SETUP_KEY
-                    fi
-                    
- if netbird up --help 2>&1 | grep -q -- "--hostname"; then
-        AUTH_CMD="netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\" --hostname \"$DEVICE_NAME\""
-    else
-        # Просто подключаемся, имя уже в config.json
-        AUTH_CMD="netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
-        log_info "Имя будет взято из config.json"
+# --- Блок авторизации (исправленный) ---
+if [ "$run_auth" = "y" ] || [ "$run_auth" = "Y" ]; then
+    if [ -z "$MANAGEMENT_URL" ]; then
+        printf "Введите Management URL [По умолчанию: https://netbird.io]: "
+        read MANAGEMENT_URL
+        [ -z "$MANAGEMENT_URL" ] && MANAGEMENT_URL="https://netbird.io"
     fi
-else
-    AUTH_CMD="netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
+    
+    if [ -z "$SETUP_KEY" ]; then
+        printf "Введите Setup Key: "
+        read SETUP_KEY
+    fi
+    
+    if [ -n "$SETUP_KEY" ]; then
+        # Базовые аргументы
+        AUTH_ARGS="--management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
+        
+        # Проверяем, как задавать имя устройства
+        if [ -n "$DEVICE_NAME" ]; then
+            # Проверяем поддержку --hostname (новый синтаксис)
+            if netbird up --help 2>&1 | grep -q -- "--hostname"; then
+                AUTH_ARGS="$AUTH_ARGS --hostname \"$DEVICE_NAME\""
+                log_info "Использую --hostname для имени устройства"
+            else
+                # Имя уже в config.json, ничего не делаем
+                log_info "Имя устройства будет взято из config.json"
+            fi
+        fi
+        
+        # Выполняем подключение
+        log_info "Подключение к management серверу..."
+        eval "netbird up $AUTH_ARGS"
+        
+        # Проверяем статус
+        if [ $? -eq 0 ]; then
+            log_info "✅ Подключение успешно!"
+            log_info "Проверьте статус: netbird status"
+        else
+            log_error "❌ Ошибка подключения!"
+            log_info "Попробуйте подключиться вручную:"
+            if [ -n "$DEVICE_NAME" ]; then
+                echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\" --hostname \"$DEVICE_NAME\""
+            else
+                echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
+            fi
+        fi
+    else
+        log_warn "Ключ не введен. Авторизация пропущена."
+        log_info "Выполните позже:"
+        if [ -n "$DEVICE_NAME" ]; then
+            echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key YOUR_KEY --hostname \"$DEVICE_NAME\""
+        else
+            echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key YOUR_KEY"
+        fi
+    fi
 fi
-
-eval "$AUTH_CMD"
-                    else
-                        log_warn "Ключ не введен. Авторизация пропущена."
-                    fi
-                fi
                 
                 post_install_menu
             fi
