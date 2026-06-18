@@ -1,19 +1,18 @@
 #!/bin/sh
 # ==========================================================
-# NetBird Installer для Keenetic v3.5 (С исправлением UTF-8)
+# NetBird Installer для Keenetic v4.0 (Финальная версия)
 # ==========================================================
+# Установка NetBird на Keenetic (Entware)
+# Без веб-сервера, только необходимый минимум
 
 set -e
 
 # --- 1. Базовые настройки ---
-VERSION="3.5"
+VERSION="4.0"
 SCRIPT_NAME="netbird-install.sh"
 LOG_DIR="/opt/var/log/netbird"
 BACKUP_DIR="/opt/backups/netbird"
 CONFIG_DIR="/opt/etc/netbird"
-NETBIRD_IFACE="${NETBIRD_IFACE:-wt0}"
-WEB_PORT="${WEB_PORT:-8989}"
-INSTALL_WEB="${INSTALL_WEB:-true}"
 DRY_RUN=false
 AUTO_MODE=false
 DEBUG=false
@@ -56,7 +55,6 @@ print_header() {
 # --- Очистка имени устройства ---
 sanitize_device_name() {
     local name="$1"
-    # Оставляем только латиницу, цифры, дефис и подчеркивание
     echo "$name" | tr -cd 'A-Za-z0-9-_.' | tr ' ' '_'
 }
 
@@ -103,33 +101,6 @@ check_management_url() {
     fi
 }
 
-# Определение IP адреса роутера
-get_local_ip() {
-    local ip=""
-    
-    # 1. Пробуем br0 (основной мост Keenetic)
-    if [ -z "$ip" ]; then
-        ip=$(ip -4 addr show br0 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
-    fi
-    
-    # 2. Пробуем eth0 (обычно LAN)
-    if [ -z "$ip" ]; then
-        ip=$(ip -4 addr show eth0 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
-    fi
-    
-    # 3. Пробуем любой интерфейс с приватными адресами
-    if [ -z "$ip" ]; then
-        ip=$(ip -4 addr show | grep -oP 'inet \K(192\.168\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[0-1])\.[0-9]+\.[0-9]+|10\.[0-9]+\.[0-9]+\.[0-9]+)' | head -1)
-    fi
-    
-    # 4. Если ничего не нашли - возвращаем localhost
-    if [ -z "$ip" ]; then
-        ip="127.0.0.1"
-    fi
-    
-    echo "$ip"
-}
-
 # --- Основные функции установки ---
 
 install_base_packages() {
@@ -147,22 +118,6 @@ install_base_packages() {
     }
     
     log_info "✓ Базовые пакеты установлены"
-    return 0
-}
-
-install_web_packages() {
-    log_info "Установка пакетов для веб-сервера..."
-    [ "$DRY_RUN" = true ] && { log_info "[DRY-RUN] Установка веб-пакетов"; return 0; }
-    
-    local packages="lighttpd lighttpd-mod-cgi lighttpd-mod-fastcgi"
-    log_info "Установка пакетов: $packages"
-    opkg install $packages || { 
-        log_warn "Не удалось установить все веб-пакеты"
-        log_info "Попробуйте установить вручную: opkg install $packages"
-        return 1
-    }
-    
-    log_info "✓ Веб-пакеты установлены"
     return 0
 }
 
@@ -216,7 +171,6 @@ configure_netbird() {
 EOF
     
     if [ -n "$DEVICE_NAME" ]; then
-        # Очищаем имя перед записью в конфиг
         SANITIZED_NAME=$(sanitize_device_name "$DEVICE_NAME")
         echo "  ,\"Name\": \"$SANITIZED_NAME\"" >> "$CONFIG_DIR/config.json"
         if [ "$SANITIZED_NAME" != "$DEVICE_NAME" ]; then
@@ -320,8 +274,6 @@ case "$table" in
     $IPT -C INPUT -i wt0 -j ACCEPT 2>/dev/null || $IPT -I INPUT 1 -i wt0 -j ACCEPT
     $IPT -C FORWARD -i wt0 -o br0 -j ACCEPT 2>/dev/null || $IPT -I FORWARD 1 -i wt0 -o br0 -j ACCEPT
     $IPT -C FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || $IPT -I FORWARD 1 -m state --state RELATED,ESTABLISHED -j ACCEPT
-    $IPT -t mangle -C OUTPUT -o wt0 -j DSCP --set-dscp 46 2>/dev/null || $IPT -t mangle -I OUTPUT -o wt0 -j DSCP --set-dscp 46
-    $IPT -t mangle -C FORWARD -i wt0 -j DSCP --set-dscp 46 2>/dev/null || $IPT -t mangle -I FORWARD -i wt0 -j DSCP --set-dscp 46
     ;;
   nat)
     /opt/sbin/iptables.real iptables -t nat -C POSTROUTING -s $NETBIRD_NET -o br0 -j MASQUERADE 2>/dev/null || \
@@ -335,212 +287,6 @@ exit 0
 EOF
     chmod +x /opt/etc/ndm/netfilter.d/netbird.sh
     log_info "✓ Правила фаервола настроены"
-}
-
-# --- Функция настройки веб-сервера lighttpd ---
-setup_web_interface() {
-    local web_port="${1:-$WEB_PORT}"
-    log_info "Настройка веб-интерфейса (lighttpd) на порту $web_port..."
-    [ "$DRY_RUN" = true ] && return 0
-    
-    # Определяем IP
-    log_info "Определение IP адреса роутера..."
-    LOCAL_IP=$(get_local_ip)
-    
-    # Если IP localhost или не удалось определить - запрашиваем вручную
-    if [ "$LOCAL_IP" = "127.0.0.1" ]; then
-        log_warn "Не удалось автоматически определить IP роутера"
-        print_header "Ручной ввод IP адреса"
-        echo "Введите локальный IP адрес роутера (например, 192.168.1.1)"
-        echo "Нажмите Enter для использования 127.0.0.1 (localhost)"
-        printf "IP адрес: "
-        read LOCAL_IP
-        [ -z "$LOCAL_IP" ] && LOCAL_IP="127.0.0.1"
-    fi
-    
-    log_info "✓ Использую IP: $LOCAL_IP"
-    
-    # Устанавливаем веб-пакеты
-    install_web_packages || return 1
-    
-    # Создаем директории
-    mkdir -p /opt/www/netbird /opt/var/log/lighttpd
-    
-    # Создаем HTML страницу
-    cat << 'EOF' > /opt/www/netbird/index.html
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta http-equiv="refresh" content="10">
-    <title>NetBird Status</title>
-    <style>
-        body { font-family: 'Courier New', monospace; background: #1e1e1e; color: #d4d4d4; padding: 20px; margin: 0; }
-        .container { max-width: 900px; margin: 0 auto; }
-        h1 { color: #569cd6; border-bottom: 2px solid #569cd6; padding-bottom: 10px; }
-        .status-ok { color: #4ec9b0; }
-        .status-error { color: #f44747; }
-        .info { color: #9cdcfe; }
-        pre { background: #2d2d2d; padding: 15px; border-radius: 5px; overflow: auto; border-left: 3px solid #569cd6; }
-        .footer { margin-top: 30px; color: #6a6a6a; font-size: 12px; text-align: center; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🔵 NetBird Status Monitor</h1>
-        <div id="status">
-            <p><span class="info">⏳ Загрузка...</span></p>
-        </div>
-        <div class="footer">
-            Обновляется каждые 10 секунд | NetBird Installer v3.5
-        </div>
-    </div>
-    <script>
-        function loadStatus() {
-            fetch('/cgi-bin/status.sh')
-                .then(r => r.text())
-                .then(data => {
-                    const lines = data.split('\n');
-                    let html = '<pre>';
-                    lines.forEach(line => {
-                        if (line.includes('Статус:') && line.includes('Connected')) {
-                            html += '<span class="status-ok">' + line + '</span>\n';
-                        } else if (line.includes('Статус:') && line.includes('Disconnected')) {
-                            html += '<span class="status-error">' + line + '</span>\n';
-                        } else if (line.includes('✓') || line.includes('✅')) {
-                            html += '<span class="status-ok">' + line + '</span>\n';
-                        } else if (line.includes('❌') || line.includes('Ошибка')) {
-                            html += '<span class="status-error">' + line + '</span>\n';
-                        } else if (line.includes('IP:') || line.includes('Имя:')) {
-                            html += '<span class="info">' + line + '</span>\n';
-                        } else {
-                            html += line + '\n';
-                        }
-                    });
-                    html += '</pre>';
-                    document.getElementById('status').innerHTML = html;
-                })
-                .catch(err => {
-                    document.getElementById('status').innerHTML = '<p class="status-error">❌ Ошибка загрузки: ' + err + '</p>';
-                });
-        }
-        loadStatus();
-        setInterval(loadStatus, 10000);
-    </script>
-</body>
-</html>
-EOF
-    
-    # Создаем CGI скрипт для статуса
-    mkdir -p /opt/www/netbird/cgi-bin
-    cat << 'EOF' > /opt/www/netbird/cgi-bin/status.sh
-#!/bin/sh
-echo "Content-Type: text/plain"
-echo ""
-echo "=== NetBird Status ==="
-/opt/etc/netbird/status.sh 2>&1
-EOF
-    chmod +x /opt/www/netbird/cgi-bin/status.sh
-    
-    # Настраиваем lighttpd с динамическим IP
-    cat << EOF > /opt/etc/lighttpd/lighttpd.conf
-server.modules = (
-    "mod_access",
-    "mod_alias",
-    "mod_cgi",
-    "mod_accesslog"
-)
-
-server.document-root = "/opt/www/netbird"
-server.port = $web_port
-server.bind = "$LOCAL_IP"
-server.pid-file = "/var/run/lighttpd.pid"
-server.errorlog = "/opt/var/log/lighttpd/error.log"
-accesslog.filename = "/opt/var/log/lighttpd/access.log"
-
-# Настройка CGI
-cgi.assign = (
-    ".sh" => "/bin/sh",
-    ".cgi" => ""
-)
-
-# Директория для CGI
-alias.url = (
-    "/cgi-bin/" => "/opt/www/netbird/cgi-bin/"
-)
-
-# MIME типы
-mimetype.assign = (
-    ".html" => "text/html",
-    ".txt" => "text/plain",
-    ".css" => "text/css",
-    ".js" => "application/javascript",
-    ".json" => "application/json",
-    ".png" => "image/png",
-    ".jpg" => "image/jpeg"
-)
-
-# Безопасность
-\$HTTP["url"] =~ "^/cgi-bin/" {
-    cgi.assign = ("" => "")
-}
-EOF
-    
-    # Создаем init-скрипт для lighttpd
-    cat << EOF > /opt/etc/init.d/S80lighttpd
-#!/bin/sh
-ENABLED=yes
-PROG=/opt/sbin/lighttpd
-ARGS="-f /opt/etc/lighttpd/lighttpd.conf"
-WEB_PORT=$web_port
-LOCAL_IP="$LOCAL_IP"
-
-case "\$1" in
-    start)
-        if [ "\$ENABLED" = "yes" ]; then
-            mkdir -p /var/run /opt/var/log/lighttpd
-            # Проверяем, жив ли интерфейс с этим IP
-            if ! ip addr show | grep -q "\$LOCAL_IP"; then
-                echo "⚠️  IP \$LOCAL_IP не найден на интерфейсах. Пытаемся определить заново..."
-                NEW_IP=\$(ip -4 addr show br0 2>/dev/null | grep -oP 'inet \\K[0-9.]+' | head -1)
-                [ -z "\$NEW_IP" ] && NEW_IP=\$(ip -4 addr show eth0 2>/dev/null | grep -oP 'inet \\K[0-9.]+' | head -1)
-                [ -z "\$NEW_IP" ] && NEW_IP=\$(ip -4 addr show | grep -oP 'inet \\K(192\\.168\\.[0-9]+\\.[0-9]+|172\\.(1[6-9]|2[0-9]|3[0-1])\\.[0-9]+\\.[0-9]+|10\\.[0-9]+\\.[0-9]+\\.[0-9]+)' | head -1)
-                [ -z "\$NEW_IP" ] && NEW_IP="127.0.0.1"
-                
-                if [ "\$NEW_IP" != "\$LOCAL_IP" ]; then
-                    echo "⚠️  IP изменен с \$LOCAL_IP на \$NEW_IP"
-                    sed -i "s/server.bind = .*/server.bind = \"\$NEW_IP\"/" /opt/etc/lighttpd/lighttpd.conf
-                    LOCAL_IP="\$NEW_IP"
-                fi
-            fi
-            echo "Запуск lighttpd на \$LOCAL_IP:\$WEB_PORT"
-            \$PROG \$ARGS
-            echo "lighttpd web server started on http://\$LOCAL_IP:\$WEB_PORT"
-        fi
-        ;;
-    stop)
-        killall lighttpd 2>/dev/null || true
-        echo "lighttpd web server stopped"
-        ;;
-    restart)
-        \$0 stop
-        sleep 1
-        \$0 start
-        ;;
-    *)
-        echo "Usage: \$0 {start|stop|restart}"
-        exit 1
-        ;;
-esac
-EOF
-    chmod +x /opt/etc/init.d/S80lighttpd
-    
-    # Запускаем веб-сервер
-    /opt/etc/init.d/S80lighttpd start 2>/dev/null || log_warn "Не удалось запустить lighttpd"
-    
-    log_info "✓ Веб-интерфейс доступен по адресу: http://$LOCAL_IP:$web_port"
-    log_info "  (или http://$(hostname):$web_port если настроен DNS)"
-    return 0
 }
 
 setup_monitoring() {
@@ -589,7 +335,6 @@ echo "Текущее имя: $(netbird status 2>/dev/null | grep 'Name' | cut -d
 printf "Введите новое имя (только латиница, цифры, - и _): "
 read new_name
 [ -z "$new_name" ] && { echo "Имя не может быть пустым!"; exit 1; }
-# Очищаем имя
 new_name=$(echo "$new_name" | tr -cd 'A-Za-z0-9-_.' | tr ' ' '_')
 printf "Продолжить? [y/n]: "
 read confirm
@@ -613,9 +358,6 @@ EOF
 #!/bin/sh
 echo "=== Обновление NetBird ==="
 opkg update && opkg upgrade netbird
-if [ -f /opt/etc/init.d/S80lighttpd ]; then
-    opkg upgrade lighttpd lighttpd-mod-cgi lighttpd-mod-fastcgi
-fi
 /opt/etc/init.d/S99netbird restart
 echo "Обновление завершено"
 EOF
@@ -637,7 +379,6 @@ interactive_name() {
         1)
             printf "Введите имя устройства: "
             read DEVICE_NAME
-            # Очищаем имя сразу
             DEVICE_NAME=$(sanitize_device_name "$DEVICE_NAME")
             if [ -z "$DEVICE_NAME" ]; then
                 DEVICE_NAME=$(sanitize_device_name "$(hostname)")
@@ -670,29 +411,6 @@ interactive_mtu() {
     fi
 }
 
-interactive_web_setup() {
-    print_header "Настройка веб-интерфейса"
-    
-    printf "Установить веб-интерфейс для мониторинга? [Y/n]: "
-    read install_web_choice
-    if [ "$install_web_choice" = "n" ] || [ "$install_web_choice" = "N" ]; then
-        INSTALL_WEB=false
-        log_info "Веб-интерфейс не будет установлен"
-        return 0
-    fi
-    
-    INSTALL_WEB=true
-    printf "Введите порт для веб-интерфейса [По умолчанию: 8989]: "
-    read web_port_input
-    if [ -n "$web_port_input" ] && echo "$web_port_input" | grep -qE '^[0-9]+$' && [ "$web_port_input" -ge 1 ] && [ "$web_port_input" -le 65535 ]; then
-        WEB_PORT="$web_port_input"
-        log_info "✓ Порт: $WEB_PORT"
-    else
-        WEB_PORT=8989
-        log_info "✓ Использую порт по умолчанию: $WEB_PORT"
-    fi
-}
-
 # --- Функции управления ---
 main_install() {
     log_info "Начало установки NetBird v$VERSION"
@@ -706,13 +424,6 @@ main_install() {
     setup_monitoring || return 1
     setup_tools || return 1
     
-    # Устанавливаем веб-интерфейс, если нужно
-    if [ "$INSTALL_WEB" = true ]; then
-        setup_web_interface "$WEB_PORT" || log_warn "Веб-интерфейс не настроен"
-    else
-        log_info "Веб-интерфейс пропущен (можно установить позже через меню)"
-    fi
-    
     if [ "$DRY_RUN" = false ]; then
         sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
         table=filter /opt/etc/ndm/netfilter.d/netbird.sh
@@ -721,69 +432,21 @@ main_install() {
     fi
     
     log_info "✅ Установка завершена успешно!"
-    if [ "$INSTALL_WEB" = true ]; then
-        LOCAL_IP=$(get_local_ip)
-        log_info "Веб-интерфейс: http://$LOCAL_IP:$WEB_PORT"
-    fi
     return 0
 }
 
 full_restart() {
     print_header "Полный перезапуск всех сервисов"
     log_info "Остановка..."
-    [ -f /opt/etc/init.d/S80lighttpd ] && /opt/etc/init.d/S80lighttpd stop
     [ -f /opt/etc/init.d/S99netbird ] && /opt/etc/init.d/S99netbird stop
     sleep 2
     log_info "Запуск..."
     [ -f /opt/etc/init.d/S99netbird ] && /opt/etc/init.d/S99netbird start
-    [ -f /opt/etc/init.d/S80lighttpd ] && /opt/etc/init.d/S80lighttpd start
     [ -f /opt/etc/ndm/netfilter.d/netbird.sh ] && {
         table=filter /opt/etc/ndm/netfilter.d/netbird.sh
         table=nat /opt/etc/ndm/netfilter.d/netbird.sh
     }
     log_info "✅ Все сервисы перезапущены!"
-    if [ -f /opt/etc/init.d/S80lighttpd ]; then
-        LOCAL_IP=$(get_local_ip)
-        log_info "Веб-интерфейс: http://$LOCAL_IP:$WEB_PORT"
-    fi
-}
-
-# Функция установки веб-интерфейса из меню
-setup_web_from_menu() {
-    print_header "Установка веб-интерфейса"
-    
-    # Проверяем, установлен ли уже веб-интерфейс
-    if [ -f /opt/etc/init.d/S80lighttpd ]; then
-        log_warn "Веб-интерфейс уже установлен!"
-        printf "Переустановить с новыми настройками? [y/n]: "
-        read reinstall_choice
-        if [ "$reinstall_choice" != "y" ] && [ "$reinstall_choice" != "Y" ]; then
-            log_info "Отмена"
-            return 0
-        fi
-        # Останавливаем старый
-        /opt/etc/init.d/S80lighttpd stop 2>/dev/null || true
-    fi
-    
-    # Запрашиваем порт
-    printf "Введите порт для веб-интерфейса [По умолчанию: 8989]: "
-    read web_port_input
-    if [ -n "$web_port_input" ] && echo "$web_port_input" | grep -qE '^[0-9]+$' && [ "$web_port_input" -ge 1 ] && [ "$web_port_input" -le 65535 ]; then
-        local web_port="$web_port_input"
-    else
-        local web_port=8989
-        log_info "✓ Использую порт по умолчанию: $web_port"
-    fi
-    
-    # Устанавливаем
-    setup_web_interface "$web_port"
-    if [ $? -eq 0 ]; then
-        LOCAL_IP=$(get_local_ip)
-        log_info "✅ Веб-интерфейс успешно установлен на порту $web_port"
-        log_info "URL: http://$LOCAL_IP:$web_port"
-    else
-        log_error "❌ Не удалось установить веб-интерфейс"
-    fi
 }
 
 show_status() {
@@ -802,11 +465,6 @@ show_logs() {
     echo ""
     echo "=== netbird_watchdog.log ==="
     tail -n "$lines" /opt/var/log/netbird_watchdog.log 2>/dev/null || echo "Лог не найден"
-    if [ -f /opt/var/log/lighttpd/error.log ]; then
-        echo ""
-        echo "=== lighttpd error.log ==="
-        tail -n "$lines" /opt/var/log/lighttpd/error.log 2>/dev/null || echo "Лог не найден"
-    fi
 }
 
 stop_service() { [ "$DRY_RUN" = false ] && /opt/etc/init.d/S99netbird stop 2>/dev/null; }
@@ -817,9 +475,6 @@ update_script() {
     print_header "Обновление"
     [ -f "$CONFIG_DIR/update.sh" ] && "$CONFIG_DIR/update.sh" || {
         opkg update && opkg upgrade netbird
-        if [ -f /opt/etc/init.d/S80lighttpd ]; then
-            opkg upgrade lighttpd lighttpd-mod-cgi lighttpd-mod-fastcgi
-        fi
         /opt/etc/init.d/S99netbird restart
     }
 }
@@ -831,13 +486,11 @@ uninstall() {
     [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { log_info "Отменено"; return 0; }
     [ "$DRY_RUN" = true ] && return 0
     create_backup
-    [ -f /opt/etc/init.d/S80lighttpd ] && /opt/etc/init.d/S80lighttpd stop 2>/dev/null || true
     [ -f /opt/etc/init.d/S99netbird ] && /opt/etc/init.d/S99netbird stop 2>/dev/null || true
-    opkg remove netbird lighttpd lighttpd-mod-cgi lighttpd-mod-fastcgi 2>/dev/null || true
-    rm -rf "$CONFIG_DIR" /opt/var/lib/netbird /opt/www/netbird /opt/etc/lighttpd
+    opkg remove netbird iptables cron 2>/dev/null || true
+    rm -rf "$CONFIG_DIR" /opt/var/lib/netbird
     [ -f /opt/sbin/iptables.real ] && mv /opt/sbin/iptables.real /opt/sbin/iptables
-    rm -f /opt/etc/init.d/S99netbird /opt/etc/init.d/S80lighttpd /opt/etc/ndm/netfilter.d/netbird.sh
-    # Удаляем симлинк, если он есть
+    rm -f /opt/etc/init.d/S99netbird /opt/etc/ndm/netfilter.d/netbird.sh
     [ -L /opt/bin/netbird ] && rm -f /opt/bin/netbird
     sed -i '\#netbird#d' /opt/etc/crontab 2>/dev/null
     log_info "✅ NetBird полностью удален"
@@ -853,12 +506,9 @@ post_install_menu() {
         echo "  3) Изменить имя устройства"
         echo "  4) Полный перезапуск всех сервисов"
         echo "  5) Обновить скрипт"
-        echo "  6) Установить/Переустановить веб-интерфейс"
-        echo "  7) Перезапустить веб-интерфейс"
-        echo "  8) Информация о веб-интерфейсе"
         echo "  0) Выход"
         echo ""
-        printf "Выберите опцию [0-8]: "
+        printf "Выберите опцию [0-5]: "
         read menu_choice
         
         case "$menu_choice" in
@@ -896,43 +546,6 @@ post_install_menu() {
                 printf "Нажмите Enter для продолжения..."
                 read dummy
                 ;;
-            6)
-                setup_web_from_menu
-                echo ""
-                printf "Нажмите Enter для продолжения..."
-                read dummy
-                ;;
-            7)
-                if [ -f /opt/etc/init.d/S80lighttpd ]; then
-                    /opt/etc/init.d/S80lighttpd restart
-                    log_info "✓ Веб-интерфейс перезапущен"
-                else
-                    log_error "Веб-интерфейс не установлен. Используйте опцию 6 для установки."
-                fi
-                echo ""
-                printf "Нажмите Enter для продолжения..."
-                read dummy
-                ;;
-            8)
-                echo "=== Информация о веб-интерфейсе ==="
-                if [ -f /opt/etc/init.d/S80lighttpd ]; then
-                    local current_port=$(grep "server.port" /opt/etc/lighttpd/lighttpd.conf 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
-                    local current_ip=$(grep "server.bind" /opt/etc/lighttpd/lighttpd.conf 2>/dev/null | cut -d'"' -f2)
-                    echo "URL: http://${current_ip:-$(get_local_ip)}:${current_port:-8989}"
-                    echo "Порт: ${current_port:-8989}"
-                    echo "IP: ${current_ip:-$(get_local_ip)}"
-                    echo "Статус: $(pidof lighttpd >/dev/null && echo '✅ Запущен' || echo '❌ Остановлен')"
-                    echo "Конфиг: /opt/etc/lighttpd/lighttpd.conf"
-                    echo "Лог: /opt/var/log/lighttpd/error.log"
-                    echo "Документы: /opt/www/netbird"
-                else
-                    echo "❌ Веб-интерфейс не установлен"
-                    echo "Используйте опцию 6 для установки"
-                fi
-                echo ""
-                printf "Нажмите Enter для продолжения..."
-                read dummy
-                ;;
             0)
                 log_info "Выход из меню"
                 break
@@ -950,30 +563,22 @@ setup_netbird_command() {
     log_info "Настройка команды 'netbird'..."
     [ "$DRY_RUN" = true ] && { log_info "[DRY-RUN] Создание симлинка"; return 0; }
     
-    # Определяем путь к текущему скрипту
     local script_path=$(readlink -f "$0" 2>/dev/null || echo "/opt/bin/netbird")
     
-    # Используем /opt/bin (доступно для записи в Entware)
     mkdir -p /opt/bin
     
-    # Если есть старый симлинк - удаляем
     [ -L /opt/bin/netbird ] && rm -f /opt/bin/netbird
     
-    # Если существует реальный файл netbird (не симлинк) - перемещаем его
     if [ -f /opt/bin/netbird ] && [ ! -L /opt/bin/netbird ]; then
         log_warn "Файл /opt/bin/netbird уже существует. Перемещаем в /opt/bin/netbird.bin"
         mv /opt/bin/netbird /opt/bin/netbird.bin
     fi
     
-    # Создаем симлинк в /opt/bin
     ln -sf "$script_path" /opt/bin/netbird
     
-    # Проверяем, есть ли /opt/bin в PATH
     if ! echo "$PATH" | grep -q "/opt/bin"; then
         log_warn "/opt/bin не найден в PATH. Добавляем..."
-        # Добавляем в PATH для текущей сессии
         export PATH="/opt/bin:$PATH"
-        # Добавляем в профиль для постоянного использования
         mkdir -p /opt/etc
         echo 'export PATH="/opt/bin:$PATH"' >> /opt/etc/profile
         log_info "✓ /opt/bin добавлен в PATH"
@@ -988,7 +593,6 @@ setup_netbird_command() {
     log_info ""
     log_info "  Если команда 'netbird' не найдена, выполните:"
     log_info "    export PATH=\"/opt/bin:\$PATH\""
-    log_info "  или перезайдите в терминал"
 }
 
 # --- Аргументы ---
@@ -1005,10 +609,8 @@ usage() {
     echo "  --mtu MTU    - MTU интерфейса"
     echo "  --url URL    - Management URL"
     echo "  --key KEY    - Setup Key"
-    echo "  --port PORT  - Порт веб-интерфейса"
-    echo "  --no-web     - Не устанавливать веб-интерфейс"
     echo ""
-    echo "Пример: netbird install --auto --name '10-Antipino' --no-web"
+    echo "Пример: netbird install --auto --name '10-Antipino'"
 }
 
 parse_args() {
@@ -1029,8 +631,6 @@ parse_args() {
             --mtu) MTU_VALUE="$2"; shift 2 ;;
             --url) MANAGEMENT_URL="$2"; shift 2 ;;
             --key) SETUP_KEY="$2"; shift 2 ;;
-            --port) WEB_PORT="$2"; shift 2 ;;
-            --no-web) INSTALL_WEB=false; shift ;;
             *) log_error "Неизвестный аргумент: $1"; usage; exit 1 ;;
         esac
     done
@@ -1049,7 +649,6 @@ main() {
             [ "$AUTO_MODE" = false ] && { 
                 interactive_name
                 interactive_mtu
-                interactive_web_setup
             }
             
             if [ -n "$MANAGEMENT_URL" ]; then
@@ -1069,51 +668,40 @@ main() {
                         read MANAGEMENT_URL
                         [ -z "$MANAGEMENT_URL" ] && MANAGEMENT_URL="https://netbird.io"
                     fi
-                    # Очищаем URL
                     MANAGEMENT_URL=$(echo "$MANAGEMENT_URL" | tr -d ' ')
                     
                     if [ -z "$SETUP_KEY" ]; then
                         printf "Введите Setup Key: "
                         read SETUP_KEY
                     fi
-                    # Очищаем ключ
                     SETUP_KEY=$(echo "$SETUP_KEY" | tr -d ' ' | tr -d '\r' | tr -d '\n')
                     
                     if [ -n "$SETUP_KEY" ]; then
-                        # Формируем команду с очищенным именем
                         AUTH_ARGS="--management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
                         
-                        # Проверяем поддержку --hostname
-                        if netbird up --help 2>&1 | grep -q -- "--hostname"; then
-                            if [ -n "$DEVICE_NAME" ]; then
+                        if [ -n "$DEVICE_NAME" ]; then
+                            if netbird up --help 2>&1 | grep -q -- "--hostname"; then
                                 SANITIZED_NAME=$(sanitize_device_name "$DEVICE_NAME")
                                 AUTH_ARGS="$AUTH_ARGS --hostname \"$SANITIZED_NAME\""
                                 log_info "Использую --hostname для имени устройства: $SANITIZED_NAME"
+                            else
+                                log_info "Имя будет взято из config.json"
                             fi
-                        elif netbird up --help 2>&1 | grep -q -- "--name"; then
-                            if [ -n "$DEVICE_NAME" ]; then
-                                SANITIZED_NAME=$(sanitize_device_name "$DEVICE_NAME")
-                                AUTH_ARGS="$AUTH_ARGS --name \"$SANITIZED_NAME\""
-                                log_info "Использую --name для имени устройства: $SANITIZED_NAME"
-                            fi
-                        else
-                            log_info "Имя будет взято из config.json"
                         fi
                         
                         log_info "Подключение к management серверу: $MANAGEMENT_URL"
                         log_info "Setup Key: ${SETUP_KEY:0:8}... (скрыто)"
                         
-                        # Выполняем подключение с увеличенным таймаутом
                         eval "netbird up $AUTH_ARGS --timeout 120" || {
                             log_error "❌ Ошибка подключения!"
-                            log_info "Попробуйте альтернативный способ:"
+                            log_info "Попробуйте вручную:"
                             log_info "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
                             log_info ""
                             log_info "Если ошибка повторяется, проверьте:"
                             log_info "  1. Доступность сервера: curl -v $MANAGEMENT_URL"
                             log_info "  2. Корректность Setup Key"
-                            log_info "  3. Имя устройства содержит только латиницу и цифры"
-                            log_info "  4. Попробуйте подключиться без имени: netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
+                            log_info "  3. Попробуйте подключиться без имени:"
+                            log_info "     netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
                         }
                     else
                         log_warn "Ключ не введен. Авторизация пропущена."
@@ -1132,7 +720,6 @@ main() {
         update) update_script ;;
         uninstall) 
             uninstall
-            # Удаляем симлинк
             [ -L /opt/bin/netbird ] && rm -f /opt/bin/netbird
             ;;
         help|*) usage ;;
@@ -1140,7 +727,6 @@ main() {
 }
 
 # --- Запуск ---
-# Сохраняем путь к скрипту для симлинка
 SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null || echo "/opt/bin/netbird")
 
 parse_args "$@"
