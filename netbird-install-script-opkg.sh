@@ -1,6 +1,6 @@
 #!/bin/sh
 # ==========================================================
-# NetBird Installer для Keenetic v4.3 (С исправлением сокета)
+# NetBird Installer для Keenetic v4.5 (Правильный порядок)
 # ==========================================================
 # Автоматический скрипт комплексного развертывания NetBird 
 # для Keenetic (Entware)
@@ -8,7 +8,7 @@
 set -e
 
 # --- 1. Базовые настройки ---
-VERSION="4.3"
+VERSION="4.5"
 LOG_DIR="/opt/var/log/netbird"
 BACKUP_DIR="/opt/backups/netbird"
 CONFIG_DIR="/opt/etc/netbird"
@@ -94,33 +94,6 @@ check_management_url() {
     else
         log_warn "curl не установлен, пропускаем проверку"
         return 0
-    fi
-}
-
-# Проверка что демон работает
-wait_for_daemon() {
-    local max_attempts=10
-    local attempt=1
-    log_info "Ожидание запуска демона NetBird..."
-    while [ $attempt -le $max_attempts ]; do
-        if [ -S "/opt/var/run/netbird.sock" ]; then
-            log_info "✓ Демон NetBird запущен (сокет найден)"
-            return 0
-        fi
-        log_info "Ожидание... ($attempt/$max_attempts)"
-        sleep 2
-        attempt=$((attempt + 1))
-    done
-    log_warn "⚠ Демон NetBird не запустился автоматически"
-    log_info "Попытка ручного запуска..."
-    /opt/etc/init.d/S99netbird start
-    sleep 3
-    if [ -S "/opt/var/run/netbird.sock" ]; then
-        log_info "✓ Демон NetBird запущен"
-        return 0
-    else
-        log_error "❌ Не удалось запустить демон NetBird"
-        return 1
     fi
 }
 
@@ -344,7 +317,6 @@ tail -n 10 /opt/var/log/netbird.log 2>/dev/null || echo "Лог не найде�
 EOF
     chmod +x "$CONFIG_DIR/status.sh"
     
-    # Настройка ротации логов
     echo "0 0 * * * find /opt/var/log/ -name 'netbird*.log' -size +10M -exec mv {} {}.old \; -exec gzip {} \;" >> /opt/etc/crontab
     
     log_info "✓ Мониторинг настроен"
@@ -462,7 +434,6 @@ main_install() {
         sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
         table=filter /opt/etc/ndm/netfilter.d/netbird.sh
         table=nat /opt/etc/ndm/netfilter.d/netbird.sh
-        /opt/etc/init.d/S99netbird start
     fi
     
     log_info "✅ Установка завершена успешно!"
@@ -646,7 +617,7 @@ usage() {
     echo "  --url URL    - Management URL"
     echo "  --key KEY    - Setup Key"
     echo ""
-    echo "Пример: netbird install --auto --name '10-Antipino'"
+    echo "Пример: netbird install --auto --name '10-Antipino' --url 'https://netbird.um-ural.ru' --key 'ВАШ-КЛЮЧ'"
 }
 
 parse_args() {
@@ -685,25 +656,40 @@ main() {
                 interactive_mtu
             fi
             
-            if [ -n "$MANAGEMENT_URL" ]; then
+            # Проверяем URL и KEY, если переданы через аргументы
+            if [ -n "$MANAGEMENT_URL" ] && [ -n "$SETUP_KEY" ]; then
                 check_management_url "$MANAGEMENT_URL"
+                # Автоматическая авторизация
+                log_info "Выполнение автоматической авторизации..."
+                AUTH_ARGS="--management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
+                if [ -n "$DEVICE_NAME" ]; then
+                    if netbird up --help 2>&1 | grep -q -- "--hostname"; then
+                        AUTH_ARGS="$AUTH_ARGS --hostname \"$DEVICE_NAME\""
+                    fi
+                fi
+                eval "netbird up $AUTH_ARGS --timeout 120" || {
+                    log_error "❌ Ошибка авторизации!"
+                    log_info "Попробуйте вручную:"
+                    echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
+                    if [ -n "$DEVICE_NAME" ]; then
+                        echo "  c именем: netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\" --hostname \"$DEVICE_NAME\""
+                    fi
+                }
             fi
             
+            # Установка
             main_install
             setup_netbird_command
             
+            # Запускаем демон ПОСЛЕ авторизации
+            if [ "$DRY_RUN" = false ]; then
+                log_info "Запуск демона NetBird..."
+                /opt/etc/init.d/S99netbird start
+                sleep 3
+            fi
+            
             if [ "$AUTO_MODE" = false ] && [ "$DRY_RUN" = false ]; then
                 print_header "Авторизация в сети"
-                
-                # Убеждаемся что демон запущен
-                wait_for_daemon || {
-                    log_error "Не удалось запустить демон, попробуйте вручную:"
-                    log_info "  /opt/etc/init.d/S99netbird start"
-                    log_info "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
-                    post_install_menu
-                    return 1
-                }
-                
                 printf "Выполнить привязку к серверу? [y/n]: "
                 read run_auth </dev/tty
                 
