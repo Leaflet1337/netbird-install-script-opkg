@@ -41,6 +41,11 @@ opkg install curl
 curl -sSL https://raw.githubusercontent.com/Leaflet1337/netbird-install-script-opkg/main/netbird-install-script-opkg.sh | tr -d '\r' > /tmp/nb.sh && sh /tmp/nb.sh && rm -f /tmp/nb.sh
 ```
 
+Удаление и восстановление всех файлов как было ДО установки:
+
+```
+curl -sSL https://raw.githubusercontent.com/Leaflet1337/netbird-install-script-opkg/main/netbird-remove-all.sh | tr -d '\r' > /tmp/nb.sh && sh /tmp/nb.sh && rm -f /tmp/nb.sh
+```
 
 ## Пошаговая инструкция по ручной настройке
 
