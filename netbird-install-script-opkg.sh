@@ -1,12 +1,11 @@
 #!/bin/sh
 # ==========================================================
-# NetBird Installer для Keenetic v5.0 (Финальная упрощенная версия)
+# NetBird Installer для Keenetic v5.1 (Исправленный синтаксис)
 # ==========================================================
-# Автоматическая установка NetBird на Keenetic (Entware)
 
 set -e
 
-VERSION="5.0"
+VERSION="5.1"
 LOG_DIR="/opt/var/log/netbird"
 BACKUP_DIR="/opt/backups/netbird"
 CONFIG_DIR="/opt/etc/netbird"
@@ -132,11 +131,10 @@ configure_netbird() {
     
     mkdir -p "$CONFIG_DIR"
     
-    # MTU для NetBird по умолчанию 1280 (рекомендовано в документации)
-    # Используем 1420 для WireGuard (стандартный MTU)
+    # MTU 1420 для WireGuard (стандартный MTU)
     MTU_VALUE=1420
     
-    cat << EOF > "$CONFIG_DIR/config.json
+    cat << EOF > "$CONFIG_DIR/config.json"
 {
   "WgIface": "wt0",
   "WgPort": 51825,
@@ -636,6 +634,7 @@ main() {
                 echo ""
                 echo "⚠️  Важно: ключ должен быть в формате XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
                 echo "⚠️  Важно: не вводите "/" в конце URL для избежания двойного // в пути"
+                echo ""
                 log_info "После выполнения команды проверьте статус: netbird status"
                 echo ""
                 echo "======================================================="
