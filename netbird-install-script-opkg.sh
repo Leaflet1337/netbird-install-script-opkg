@@ -1,11 +1,12 @@
 #!/bin/sh
 # ==========================================================
-# NetBird Installer для Keenetic v4.6
+# NetBird Installer для Keenetic v5.0 (Финальная упрощенная версия)
 # ==========================================================
+# Автоматическая установка NetBird на Keenetic (Entware)
 
 set -e
 
-VERSION="4.6"
+VERSION="5.0"
 LOG_DIR="/opt/var/log/netbird"
 BACKUP_DIR="/opt/backups/netbird"
 CONFIG_DIR="/opt/etc/netbird"
@@ -50,6 +51,7 @@ sanitize_device_name() {
     echo "$1" | tr -cd 'A-Za-z0-9-_.' | tr ' ' '_'
 }
 
+# --- Вспомогательные функции ---
 check_dependencies() {
     for cmd in opkg grep sed awk cat mkdir rm mv cp chmod; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -71,6 +73,8 @@ create_backup() {
     [ -f "/opt/etc/init.d/S99netbird" ] && cp "/opt/etc/init.d/S99netbird" "$backup_path/S99netbird" 2>/dev/null || true
     log_info "✓ Резервная копия создана: $backup_path"
 }
+
+# --- Основные функции установки ---
 
 install_base_packages() {
     log_info "Обновление репозиториев и установка пакетов..."
@@ -127,12 +131,18 @@ configure_netbird() {
     [ "$DRY_RUN" = true ] && return 0
     
     mkdir -p "$CONFIG_DIR"
-    cat << 'EOF' > "$CONFIG_DIR/config.json"
+    
+    # MTU для NetBird по умолчанию 1280 (рекомендовано в документации)
+    # Используем 1420 для WireGuard (стандартный MTU)
+    MTU_VALUE=1420
+    
+    cat << EOF > "$CONFIG_DIR/config.json
 {
   "WgIface": "wt0",
   "WgPort": 51825,
   "DisableFirewall": true,
-  "IFaceDiscover": false
+  "IFaceDiscover": false,
+  "WgMTU": $MTU_VALUE
 EOF
     
     if [ -n "$DEVICE_NAME" ]; then
@@ -140,12 +150,8 @@ EOF
         echo "  ,\"Name\": \"$SANITIZED_NAME\"" >> "$CONFIG_DIR/config.json"
     fi
     
-    if [ -n "$MTU_VALUE" ]; then
-        echo "  ,\"WgMTU\": $MTU_VALUE" >> "$CONFIG_DIR/config.json"
-    fi
-    
     echo "}" >> "$CONFIG_DIR/config.json"
-    log_info "✓ Конфигурация создана"
+    log_info "✓ Конфигурация создана (MTU: $MTU_VALUE)"
     return 0
 }
 
@@ -169,7 +175,7 @@ case "$1" in
             $PROG $ARGS &
             sleep 3
             
-            # Запускаем бесконечный цикл-страж в фоновом режиме
+            # Запускаем бесконечный цикл-страж
             (
                 RESTART_COUNT_FILE="/tmp/netbird_restart_count"
                 RESTART_LIMIT=5
@@ -319,22 +325,11 @@ if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
     SETUP_KEY=$(netbird status 2>/dev/null | grep 'Setup Key' | cut -d: -f2- | xargs)
     /opt/etc/init.d/S99netbird stop
     sleep 2
-    
-    # Исправленный блок изменения имени с безопасным разбором URL
-    if [ -z "$MGMT_URL" ] || [ "$MGMT_URL" = "https://netbird.io" ] || [ "$MGMT_URL" = "https://api.netbird.io" ]; then
-        if netbird up --help 2>&1 | grep -q -- "--hostname"; then
-            netbird login --setup-key "$SETUP_KEY" --hostname "$new_name"
-        else
-            netbird login --setup-key "$SETUP_KEY" --name "$new_name"
-        fi
+    if netbird up --help 2>&1 | grep -q -- "--hostname"; then
+        netbird up --management-url "$MGMT_URL" --setup-key "$SETUP_KEY" --hostname "$new_name"
     else
-        if netbird up --help 2>&1 | grep -q -- "--hostname"; then
-            netbird login --management-url "$MGMT_URL" --setup-key "$SETUP_KEY" --hostname "$new_name"
-        else
-            netbird login --management-url "$MGMT_URL" --setup-key "$SETUP_KEY" --name "$new_name"
-        fi
+        netbird up --management-url "$MGMT_URL" --setup-key "$SETUP_KEY" --name "$new_name"
     fi
-    netbird up
     echo "✓ Имя изменено на: $new_name"
 else
     echo "Операция отменена"
@@ -349,56 +344,30 @@ opkg update && opkg upgrade netbird
 echo "Обновление завершено"
 EOF
     
-    chmod +x "$CONFIG_DIR/change_name.sh" "$CONFIG_DIR/update.sh"
+    chmod +x "$CONFIG_DIR/"change_name.sh "$CONFIG_DIR/"update.sh
     log_info "✓ Дополнительные инструменты настроены"
     return 0
 }
 
+# --- Интерактивные блоки ---
 interactive_name() {
     print_header "Настройка имени устройства"
-    echo "Варианты действий:"
-    echo "  1) Ввести имя вручную"
-    echo "  2) Использовать имя хоста (текущее: $(hostname))"
-    echo "  3) Пропустить (авто-генерация NetBird)"
-    printf "Выберите вариант [1-3]: "
-    read name_option
+    echo "Имя будет отображаться в панели управления NetBird"
+    echo "Допустимые символы: латиница, цифры, - и _"
+    echo ""
+    printf "Введите имя устройства: "
+    read DEVICE_NAME
     
-    case "$name_option" in
-        1)
-            printf "Введите имя устройства: "
-            read DEVICE_NAME
-            if [ -z "$DEVICE_NAME" ]; then
-                DEVICE_NAME=$(hostname)
-                log_warn "Имя не введено, использую имя хоста"
-            fi
-            DEVICE_NAME=$(sanitize_device_name "$DEVICE_NAME")
-            log_info "✓ Имя устройства: $DEVICE_NAME"
-            ;;
-        2)
-            DEVICE_NAME=$(sanitize_device_name "$(hostname)")
-            log_info "✓ Использую имя хоста: $DEVICE_NAME"
-            ;;
-        *)
-            DEVICE_NAME=""
-            log_info "Имя не задано"
-            ;;
-    esac
-}
-
-interactive_mtu() {
-    print_header "Настройка MTU"
-    printf "Хотите настроить MTU? [y/n]: "
-    read set_mtu
-    if [ "$set_mtu" = "y" ] || [ "$set_mtu" = "Y" ]; then
-        printf "Введите MTU (по умолчанию 1420): "
-        read MTU_VALUE
-        [ -z "$MTU_VALUE" ] && MTU_VALUE=1420
-        log_info "✓ MTU: $MTU_VALUE"
+    if [ -z "$DEVICE_NAME" ]; then
+        DEVICE_NAME=$(sanitize_device_name "$(hostname)")
+        log_warn "Имя не введено, использую имя хоста: $DEVICE_NAME"
     else
-        MTU_VALUE=""
+        DEVICE_NAME=$(sanitize_device_name "$DEVICE_NAME")
+        log_info "✓ Имя устройства: $DEVICE_NAME"
     fi
 }
 
+# --- Функции управления ---
 main_install() {
     log_info "Начало установки NetBird v$VERSION"
     
@@ -490,6 +459,7 @@ uninstall() {
     log_info "✅ NetBird полностью удален"
 }
 
+# --- Меню ---
 post_install_menu() {
     while true; do
         print_header "Меню управления NetBird"
@@ -589,15 +559,12 @@ usage() {
     echo "Команды: install|start|stop|restart|fullrestart|status|logs|menu|update|uninstall|help"
     echo "Опции:"
     echo "  --dry-run    - Режим тестирования"
-    echo "  --auto       - Автоматический режим"
+    echo "  --auto       - Автоматический режим (без запросов)"
     echo "  --debug      - Включить отладку"
     echo "  --quiet      - Минимальный вывод"
     echo "  --name NAME  - Имя устройства"
-    echo "  --mtu MTU    - MTU интерфейса"
-    echo "  --url URL    - Management URL"
-    echo "  --key KEY    - Setup Key"
     echo ""
-    echo "Пример: netbird install --auto --name '10-Antipino' --url 'https://netbird.um-ural.ru' --key 'ВАШ-КЛЮЧ'"
+    echo "Пример: netbird install --auto --name '10-Antipino'"
 }
 
 parse_args() {
@@ -613,9 +580,6 @@ parse_args() {
             --name) 
                 DEVICE_NAME=$(sanitize_device_name "$2")
                 shift 2 ;;
-            --mtu) MTU_VALUE="$2"; shift 2 ;;
-            --url) MANAGEMENT_URL="$2"; shift 2 ;;
-            --key) SETUP_KEY="$2"; shift 2 ;;
             *) log_error "Неизвестный аргумент: $1"; usage; exit 1 ;;
         esac
     done
@@ -633,28 +597,22 @@ main() {
     
     case "$COMMAND" in
         install)
+            # Запрос имени устройства
             if [ "$AUTO_MODE" = false ] && [ -z "$DEVICE_NAME" ]; then
                 interactive_name
-                interactive_mtu
             fi
             
             # Установка
             main_install
             setup_netbird_command
             
-            # ЗАПУСКАЕМ ДЕМОН
+            # Запускаем демон
             if [ "$DRY_RUN" = false ]; then
                 log_info "Запуск демона NetBird..."
                 /opt/etc/init.d/S99netbird start
                 sleep 5
                 
-                # Проверяем, что сокет создался
-                if [ ! -S "/opt/var/run/netbird.sock" ]; then
-                    log_error "Сокет не создался! Пробуем запустить вручную..."
-                    /opt/sbin/netbird service run --log-file /opt/var/log/netbird.log --log-level info --daemon-addr unix:///opt/var/run/netbird.sock &
-                    sleep 5
-                fi
-                
+                # Проверяем сокет
                 if [ -S "/opt/var/run/netbird.sock" ]; then
                     log_info "✓ Демон NetBird запущен"
                 else
@@ -664,67 +622,34 @@ main() {
             fi
             
             if [ "$AUTO_MODE" = false ] && [ "$DRY_RUN" = false ]; then
-                print_header "Авторизация в сети"
-                
-                # Проверяем наличие ключей
-                if [ -z "$MANAGEMENT_URL" ] || [ -z "$SETUP_KEY" ]; then
-                    printf "Введите Management URL [По умолчанию: https://netbird.io]: "
-                    read MANAGEMENT_URL </dev/tty
-                    [ -z "$MANAGEMENT_URL" ] && MANAGEMENT_URL="https://netbird.io"
-                    MANAGEMENT_URL=$(echo "$MANAGEMENT_URL" | tr -d ' ')
-                    
-                    echo ""
-                    printf "Введите Setup Key: "
-                    read SETUP_KEY </dev/tty
-                    SETUP_KEY=$(echo "$SETUP_KEY" | tr -d ' ' | tr -d '\r' | tr -d '\n')
-                fi
-                
+                print_header "Авторизация в сети NetBird"
+                echo "Для подключения устройства к сети выполните команду:"
                 echo ""
-                if [ -n "$SETUP_KEY" ]; then
-                    log_info "Подключение к management серверу: $MANAGEMENT_URL"
-                    log_info "Setup Key: ${SETUP_KEY:0:8}... (скрыто)"
-                    echo ""
-                    
-                    # Полностью переписанная и безопасная логика авторизации без опасных eval "netbird up..."
-                    # 1. Сначала привязываем ноду через стабильный netbird login
-                    if [ "$MANAGEMENT_URL" = "https://netbird.io" ] || [ "$MANAGEMENT_URL" = "https://api.netbird.io" ]; then
-                        if [ -n "$DEVICE_NAME" ] && netbird up --help 2>&1 | grep -q -- "--hostname"; then
-                            netbird login --setup-key "$SETUP_KEY" --hostname "$DEVICE_NAME"
-                        else
-                            netbird login --setup-key "$SETUP_KEY"
-                        fi
-                    else
-                        if [ -n "$DEVICE_NAME" ] && netbird up --help 2>&1 | grep -q -- "--hostname"; then
-                            netbird login --management-url "$MANAGEMENT_URL" --setup-key "$SETUP_KEY" --hostname "$DEVICE_NAME"
-                        else
-                            netbird login --management-url "$MANAGEMENT_URL" --setup-key "$SETUP_KEY"
-                        fi
-                    fi
-                    
-                    # 2. Если логин успешен — поднимаем интерфейс
-                    if [ $? -eq 0 ]; then
-                        log_info "✓ Авторизация успешна. Поднимаем сетевой интерфейс..."
-                        netbird up --timeout 60
-                        
-                        if [ $? -eq 0 ]; then
-                            log_info "✅ Сеть NetBird успешно поднята!"
-                        else
-                            log_error "❌ Ошибка при выполнении netbird up"
-                        fi
-                    else
-                        log_error "❌ Ошибка подключения на этапе netbird login!"
-                        echo ""
-                        log_info "Попробуйте выполнить команду вручную:"
-                        if [ "$MANAGEMENT_URL" = "https://netbird.io" ]; then
-                            echo "  netbird login --setup-key \"$SETUP_KEY\" && netbird up"
-                        else
-                            echo "  netbird login --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\" && netbird up"
-                        fi
-                    fi
-                else
-                    log_warn "Ключ не введен. Авторизация пропущена."
-                    log_info "Выполните позже: netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"ВАШ-КЛЮЧ\""
-                fi
+                echo "  netbird up --management-url https://ваш-сервер.netbird.io --setup-key ВАШ-КЛЮЧ"
+                echo ""
+                echo "Где:"
+                echo "  https://ваш-сервер.netbird.io — адрес вашего management сервера"
+                echo "  ВАШ-КЛЮЧ — ваш setup key (можно скопировать из панели управления)"
+                echo ""
+                echo "Пример:"
+                echo "  netbird up --management-url https://netbird.EXAMPLE.ru --setup-key 12345678-90AB-CDEF-GABC-DEFG12345678"
+                echo ""
+                echo "⚠️  Важно: ключ должен быть в формате XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+                echo "⚠️  Важно: не вводите "/" в конце URL для избежания двойного // в пути"
+                log_info "После выполнения команды проверьте статус: netbird status"
+                echo ""
+                echo "======================================================="
+                echo "  УСТАНОВКА ЗАВЕРШЕНА!"
+                echo "======================================================="
+                echo ""
+                echo "Для управления используйте:"
+                echo "  netbird menu     - открыть меню управления"
+                echo "  netbird status   - показать статус"
+                echo "  netbird restart  - перезапустить сервис"
+                echo ""
+                echo "Для авторизации выполните команду выше и нажмите Enter"
+                printf "Нажмите Enter для продолжения..."
+                read dummy
                 post_install_menu
             fi
             ;;
