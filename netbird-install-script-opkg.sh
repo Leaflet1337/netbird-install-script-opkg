@@ -1,20 +1,19 @@
 #!/bin/sh
 # ==========================================================
-# NetBird Installer для Keenetic v5.1 (Исправленный синтаксис)
+# NetBird Installer для Keenetic v6.0
 # ==========================================================
+# Чистая установка NetBird на Keenetic (Entware)
+# Без меню, без запроса имени
 
 set -e
 
-VERSION="5.1"
+VERSION="6.0"
 LOG_DIR="/opt/var/log/netbird"
 BACKUP_DIR="/opt/backups/netbird"
 CONFIG_DIR="/opt/etc/netbird"
 DRY_RUN=false
-AUTO_MODE=false
 DEBUG=false
 QUIET=false
-
-SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null || echo "/opt/bin/netbird")
 
 # --- Цвета ---
 if [ -t 1 ]; then
@@ -44,10 +43,6 @@ print_header() {
     echo "  $1"
     echo "======================================================="
     echo ""
-}
-
-sanitize_device_name() {
-    echo "$1" | tr -cd 'A-Za-z0-9-_.' | tr ' ' '_'
 }
 
 # --- Вспомогательные функции ---
@@ -131,25 +126,17 @@ configure_netbird() {
     
     mkdir -p "$CONFIG_DIR"
     
-    # MTU 1420 для WireGuard (стандартный MTU)
-    MTU_VALUE=1420
-    
     cat << EOF > "$CONFIG_DIR/config.json"
 {
   "WgIface": "wt0",
   "WgPort": 51825,
   "DisableFirewall": true,
   "IFaceDiscover": false,
-  "WgMTU": $MTU_VALUE
+  "WgMTU": 1420
+}
 EOF
     
-    if [ -n "$DEVICE_NAME" ]; then
-        SANITIZED_NAME=$(sanitize_device_name "$DEVICE_NAME")
-        echo "  ,\"Name\": \"$SANITIZED_NAME\"" >> "$CONFIG_DIR/config.json"
-    fi
-    
-    echo "}" >> "$CONFIG_DIR/config.json"
-    log_info "✓ Конфигурация создана (MTU: $MTU_VALUE)"
+    log_info "✓ Конфигурация создана (MTU: 1420)"
     return 0
 }
 
@@ -169,11 +156,9 @@ case "$1" in
             mkdir -p /opt/var/run /opt/var/log
             export NB_DISABLE_FIREWALL=true
             
-            # Запускаем демон
             $PROG $ARGS &
             sleep 3
             
-            # Запускаем бесконечный цикл-страж
             (
                 RESTART_COUNT_FILE="/tmp/netbird_restart_count"
                 RESTART_LIMIT=5
@@ -267,6 +252,162 @@ EOF
     return 0
 }
 
+setup_control_script() {
+    log_info "Установка скрипта управления 'netbird-ctl'..."
+    [ "$DRY_RUN" = true ] && return 0
+    
+    cat << 'EOF' > /opt/bin/netbird-ctl
+#!/bin/sh
+# ==========================================================
+# NetBird Control Script v1.0
+# ==========================================================
+
+CONFIG_DIR="/opt/etc/netbird"
+LOG_DIR="/opt/var/log/netbird"
+
+print_header() {
+    echo ""
+    echo "======================================================="
+    echo "  $1"
+    echo "======================================================="
+    echo ""
+}
+
+show_status() {
+    print_header "Статус NetBird"
+    if [ -f "$CONFIG_DIR/status.sh" ]; then
+        "$CONFIG_DIR/status.sh"
+    else
+        echo "Скрипт статуса не найден"
+        netbird status 2>/dev/null || echo "NetBird не запущен"
+        ip addr show wt0 2>/dev/null
+    fi
+}
+
+show_logs() {
+    local lines="${1:-50}"
+    print_header "Последние $lines строк логов"
+    echo "=== netbird.log ==="
+    tail -n "$lines" /opt/var/log/netbird.log 2>/dev/null || echo "Лог не найден"
+    echo ""
+    echo "=== netbird_watchdog.log ==="
+    tail -n "$lines" /opt/var/log/netbird_watchdog.log 2>/dev/null || echo "Лог не найден"
+}
+
+full_restart() {
+    print_header "Полный перезапуск всех сервисов"
+    echo "Остановка..."
+    [ -f /opt/etc/init.d/S99netbird ] && /opt/etc/init.d/S99netbird stop
+    sleep 2
+    echo "Запуск..."
+    [ -f /opt/etc/init.d/S99netbird ] && /opt/etc/init.d/S99netbird start
+    [ -f /opt/etc/ndm/netfilter.d/netbird.sh ] && {
+        table=filter /opt/etc/ndm/netfilter.d/netbird.sh
+        table=nat /opt/etc/ndm/netfilter.d/netbird.sh
+    }
+    echo "✅ Все сервисы перезапущены!"
+}
+
+show_menu() {
+    while true; do
+        print_header "Меню управления NetBird"
+        echo "Доступные опции:"
+        echo "  1) Показать статус"
+        echo "  2) Показать логи"
+        echo "  3) Перезапустить демон"
+        echo "  4) Полный перезапуск всех сервисов"
+        echo "  5) Показать конфигурацию"
+        echo "  0) Выход"
+        echo ""
+        printf "Выберите опцию [0-5]: "
+        read menu_choice
+        
+        case "$menu_choice" in
+            1)
+                show_status
+                echo ""
+                printf "Нажмите Enter для продолжения..."
+                read dummy
+                ;;
+            2)
+                show_logs 50
+                echo ""
+                printf "Нажмите Enter для продолжения..."
+                read dummy
+                ;;
+            3)
+                echo "Перезапуск демона NetBird..."
+                /opt/etc/init.d/S99netbird restart
+                echo "✅ Демон перезапущен"
+                echo ""
+                printf "Нажмите Enter для продолжения..."
+                read dummy
+                ;;
+            4)
+                full_restart
+                echo ""
+                printf "Нажмите Enter для продолжения..."
+                read dummy
+                ;;
+            5)
+                print_header "Конфигурация NetBird"
+                cat /opt/etc/netbird/config.json 2>/dev/null || echo "Конфиг не найден"
+                echo ""
+                printf "Нажмите Enter для продолжения..."
+                read dummy
+                ;;
+            0)
+                echo "Выход из меню"
+                break
+                ;;
+            *)
+                echo "Неверный выбор"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+case "$1" in
+    status)
+        show_status
+        ;;
+    logs)
+        show_logs "${2:-50}"
+        ;;
+    restart)
+        /opt/etc/init.d/S99netbird restart
+        ;;
+    fullrestart)
+        full_restart
+        ;;
+    menu)
+        show_menu
+        ;;
+    *)
+        echo "NetBird Control Script"
+        echo ""
+        echo "Использование: netbird-ctl {menu|status|logs|restart|fullrestart}"
+        echo ""
+        echo "  menu        - открыть интерактивное меню"
+        echo "  status      - показать статус"
+        echo "  logs [N]    - показать последние N строк логов (по умолчанию 50)"
+        echo "  restart     - перезапустить демон NetBird"
+        echo "  fullrestart - полный перезапуск всех сервисов"
+        echo ""
+        ;;
+esac
+EOF
+    chmod +x /opt/bin/netbird-ctl
+    
+    # Создаем симлинк для удобства
+    ln -sf /opt/bin/netbird-ctl /usr/bin/netbird-ctl 2>/dev/null || true
+    
+    log_info "✓ Скрипт управления установлен в /opt/bin/netbird-ctl"
+    log_info "  Используйте: netbird-ctl menu"
+    return 0
+}
+
 setup_monitoring() {
     log_info "Настройка мониторинга..."
     [ "$DRY_RUN" = true ] && return 0
@@ -300,71 +441,6 @@ EOF
     return 0
 }
 
-setup_tools() {
-    log_info "Настройка дополнительных инструментов..."
-    [ "$DRY_RUN" = true ] && return 0
-    
-    cat << 'EOF' > "$CONFIG_DIR/change_name.sh"
-#!/bin/sh
-echo "=== Изменение имени устройства NetBird ==="
-if ! pidof netbird >/dev/null; then
-    echo "NetBird не запущен."
-    exit 1
-fi
-echo "Текущее имя: $(netbird status 2>/dev/null | grep 'Name' | cut -d: -f2 | xargs || echo 'N/A')"
-printf "Введите новое имя: "
-read new_name
-[ -z "$new_name" ] && { echo "Имя не может быть пустым!"; exit 1; }
-new_name=$(echo "$new_name" | tr -cd 'A-Za-z0-9-_.' | tr ' ' '_')
-printf "Продолжить? [y/n]: "
-read confirm
-if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
-    MGMT_URL=$(netbird status 2>/dev/null | grep 'Management URL' | cut -d: -f2- | xargs)
-    SETUP_KEY=$(netbird status 2>/dev/null | grep 'Setup Key' | cut -d: -f2- | xargs)
-    /opt/etc/init.d/S99netbird stop
-    sleep 2
-    if netbird up --help 2>&1 | grep -q -- "--hostname"; then
-        netbird up --management-url "$MGMT_URL" --setup-key "$SETUP_KEY" --hostname "$new_name"
-    else
-        netbird up --management-url "$MGMT_URL" --setup-key "$SETUP_KEY" --name "$new_name"
-    fi
-    echo "✓ Имя изменено на: $new_name"
-else
-    echo "Операция отменена"
-fi
-EOF
-    
-    cat << 'EOF' > "$CONFIG_DIR/update.sh"
-#!/bin/sh
-echo "=== Обновление NetBird ==="
-opkg update && opkg upgrade netbird
-/opt/etc/init.d/S99netbird restart
-echo "Обновление завершено"
-EOF
-    
-    chmod +x "$CONFIG_DIR/"change_name.sh "$CONFIG_DIR/"update.sh
-    log_info "✓ Дополнительные инструменты настроены"
-    return 0
-}
-
-# --- Интерактивные блоки ---
-interactive_name() {
-    print_header "Настройка имени устройства"
-    echo "Имя будет отображаться в панели управления NetBird"
-    echo "Допустимые символы: латиница, цифры, - и _"
-    echo ""
-    printf "Введите имя устройства: "
-    read DEVICE_NAME
-    
-    if [ -z "$DEVICE_NAME" ]; then
-        DEVICE_NAME=$(sanitize_device_name "$(hostname)")
-        log_warn "Имя не введено, использую имя хоста: $DEVICE_NAME"
-    else
-        DEVICE_NAME=$(sanitize_device_name "$DEVICE_NAME")
-        log_info "✓ Имя устройства: $DEVICE_NAME"
-    fi
-}
-
 # --- Функции управления ---
 main_install() {
     log_info "Начало установки NetBird v$VERSION"
@@ -377,62 +453,19 @@ main_install() {
     setup_watchdog || return 1
     setup_firewall || return 1
     setup_monitoring || return 1
-    setup_tools || return 1
+    setup_control_script || return 1
     
     if [ "$DRY_RUN" = false ]; then
         sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
         table=filter /opt/etc/ndm/netfilter.d/netbird.sh
         table=nat /opt/etc/ndm/netfilter.d/netbird.sh
+        log_info "Запуск демона NetBird..."
+        /opt/etc/init.d/S99netbird start
+        sleep 3
     fi
     
     log_info "✅ Установка завершена успешно!"
     return 0
-}
-
-full_restart() {
-    print_header "Полный перезапуск всех сервисов"
-    log_info "Остановка..."
-    [ -f /opt/etc/init.d/S99netbird ] && /opt/etc/init.d/S99netbird stop
-    sleep 2
-    log_info "Запуск..."
-    [ -f /opt/etc/init.d/S99netbird ] && /opt/etc/init.d/S99netbird start
-    [ -f /opt/etc/ndm/netfilter.d/netbird.sh ] && {
-        table=filter /opt/etc/ndm/netfilter.d/netbird.sh
-        table=nat /opt/etc/ndm/netfilter.d/netbird.sh
-    }
-    log_info "✅ Все сервисы перезапущены!"
-}
-
-show_status() {
-    print_header "Статус NetBird"
-    if [ -f "$CONFIG_DIR/status.sh" ]; then
-        "$CONFIG_DIR/status.sh"
-    else
-        netbird status 2>/dev/null || echo "NetBird не запущен"
-        ip addr show wt0 2>/dev/null
-    fi
-}
-
-show_logs() {
-    local lines="${1:-50}"
-    print_header "Последние $lines строк логов"
-    echo "=== netbird.log ==="
-    tail -n "$lines" /opt/var/log/netbird.log 2>/dev/null || echo "Лог не найден"
-    echo ""
-    echo "=== netbird_watchdog.log ==="
-    tail -n "$lines" /opt/var/log/netbird_watchdog.log 2>/dev/null || echo "Лог не найден"
-}
-
-stop_service() { [ "$DRY_RUN" = false ] && /opt/etc/init.d/S99netbird stop 2>/dev/null; }
-start_service() { [ "$DRY_RUN" = false ] && /opt/etc/init.d/S99netbird start 2>/dev/null; }
-restart_service() { stop_service; sleep 2; start_service; }
-
-update_script() {
-    print_header "Обновление"
-    [ -f "$CONFIG_DIR/update.sh" ] && "$CONFIG_DIR/update.sh" || {
-        opkg update && opkg upgrade netbird
-        /opt/etc/init.d/S99netbird restart
-    }
 }
 
 uninstall() {
@@ -452,224 +485,56 @@ uninstall() {
     fi
     rm -f /opt/etc/init.d/S99netbird
     rm -f /opt/etc/ndm/netfilter.d/netbird.sh
-    [ -L /opt/bin/netbird ] && rm -f /opt/bin/netbird
+    rm -f /opt/bin/netbird-ctl
+    rm -f /usr/bin/netbird-ctl 2>/dev/null || true
     sed -i '\#netbird#d' /opt/etc/crontab 2>/dev/null
     log_info "✅ NetBird полностью удален"
-}
-
-# --- Меню ---
-post_install_menu() {
-    while true; do
-        print_header "Меню управления NetBird"
-        echo "Доступные опции:"
-        echo "  1) Показать статус"
-        echo "  2) Показать логи"
-        echo "  3) Изменить имя устройства"
-        echo "  4) Полный перезапуск всех сервисов"
-        echo "  5) Обновить скрипт"
-        echo "  0) Выход"
-        echo ""
-        printf "Выберите опцию [0-5]: "
-        read menu_choice
-        
-        case "$menu_choice" in
-            1)
-                show_status
-                echo ""
-                printf "Нажмите Enter для продолжения..."
-                read dummy
-                ;;
-            2)
-                show_logs 50
-                echo ""
-                printf "Нажмите Enter для продолжения..."
-                read dummy
-                ;;
-            3)
-                if [ -f "$CONFIG_DIR/change_name.sh" ]; then
-                    "$CONFIG_DIR/change_name.sh"
-                else
-                    log_error "Скрипт изменения имени не найден"
-                fi
-                echo ""
-                printf "Нажмите Enter для продолжения..."
-                read dummy
-                ;;
-            4)
-                full_restart
-                echo ""
-                printf "Нажмите Enter для продолжения..."
-                read dummy
-                ;;
-            5)
-                update_script
-                echo ""
-                printf "Нажмите Enter для продолжения..."
-                read dummy
-                ;;
-            0)
-                log_info "Выход из меню"
-                break
-                ;;
-            *)
-                log_error "Неверный выбор"
-                sleep 1
-                ;;
-        esac
-    done
-}
-
-setup_netbird_command() {
-    log_info "Настройка команды 'netbird'..."
-    [ "$DRY_RUN" = true ] && { log_info "[DRY-RUN] Создание симлинка"; return 0; }
-    
-    local script_path=$(readlink -f "$0" 2>/dev/null || echo "/opt/bin/netbird")
-    
-    mkdir -p /opt/bin
-    [ -L /opt/bin/netbird ] && rm -f /opt/bin/netbird
-    
-    if [ -f /opt/bin/netbird ] && [ ! -L /opt/bin/netbird ]; then
-        log_warn "Файл /opt/bin/netbird уже существует. Перемещаем в /opt/bin/netbird.bin"
-        mv /opt/bin/netbird /opt/bin/netbird.bin
-    fi
-    
-    ln -sf "$script_path" /opt/bin/netbird
-    
-    if ! echo "$PATH" | grep -q "/opt/bin"; then
-        log_warn "/opt/bin не найден в PATH. Добавляем..."
-        export PATH="/opt/bin:$PATH"
-        mkdir -p /opt/etc
-        echo 'export PATH="/opt/bin:$PATH"' >> /opt/etc/profile
-        log_info "✓ /opt/bin добавлен в PATH"
-    fi
-    
-    log_info "✓ Команда 'netbird' настроена в /opt/bin/netbird"
-    log_info "  Теперь можно использовать:"
-    log_info "    netbird menu     - открыть меню"
-    log_info "    netbird status   - показать статус"
-    log_info "    netbird restart  - перезапустить сервис"
-    log_info "    netbird install  - установка"
 }
 
 usage() {
     echo "NetBird Installer для Keenetic v$VERSION"
     echo ""
-    echo "Команды: install|start|stop|restart|fullrestart|status|logs|menu|update|uninstall|help"
-    echo "Опции:"
-    echo "  --dry-run    - Режим тестирования"
-    echo "  --auto       - Автоматический режим (без запросов)"
-    echo "  --debug      - Включить отладку"
-    echo "  --quiet      - Минимальный вывод"
-    echo "  --name NAME  - Имя устройства"
+    echo "Использование: netbird-install [install|uninstall|help]"
     echo ""
-    echo "Пример: netbird install --auto --name '10-Antipino'"
-}
-
-parse_args() {
-    COMMAND="install"
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            install|start|stop|restart|fullrestart|status|logs|menu|update|uninstall|help)
-                COMMAND="$1"; shift ;;
-            --dry-run) DRY_RUN=true; shift ;;
-            --auto) AUTO_MODE=true; shift ;;
-            --debug) DEBUG=true; shift ;;
-            --quiet) QUIET=true; shift ;;
-            --name) 
-                DEVICE_NAME=$(sanitize_device_name "$2")
-                shift 2 ;;
-            *) log_error "Неизвестный аргумент: $1"; usage; exit 1 ;;
-        esac
-    done
+    echo "  install   - установка NetBird"
+    echo "  uninstall - полное удаление"
+    echo "  help      - эта справка"
+    echo ""
+    echo "После установки используйте: netbird-ctl menu"
 }
 
 # ==========================================================
 # ГЛАВНАЯ ФУНКЦИЯ
 # ==========================================================
 main() {
-    [ "$DEBUG" = true ] && set -x
-    if [ "$(id -u)" -ne 0 ] && [ "$COMMAND" != "status" ] && [ "$COMMAND" != "logs" ] && [ "$COMMAND" != "help" ] && [ "$COMMAND" != "menu" ]; then
+    if [ "$(id -u)" -ne 0 ]; then
         log_error "Скрипт должен быть запущен от root"
         exit 1
     fi
     
-    case "$COMMAND" in
-        install)
-            # Запрос имени устройства
-            if [ "$AUTO_MODE" = false ] && [ -z "$DEVICE_NAME" ]; then
-                interactive_name
-            fi
-            
-            # Установка
+    case "$1" in
+        install|"")
             main_install
-            setup_netbird_command
-            
-            # Запускаем демон
-            if [ "$DRY_RUN" = false ]; then
-                log_info "Запуск демона NetBird..."
-                /opt/etc/init.d/S99netbird start
-                sleep 5
-                
-                # Проверяем сокет
-                if [ -S "/opt/var/run/netbird.sock" ]; then
-                    log_info "✓ Демон NetBird запущен"
-                else
-                    log_error "❌ Не удалось запустить демон NetBird!"
-                    log_info "Попробуйте вручную: /opt/sbin/netbird service run &"
-                fi
-            fi
-            
-            if [ "$AUTO_MODE" = false ] && [ "$DRY_RUN" = false ]; then
-                print_header "Авторизация в сети NetBird"
-                echo "Для подключения устройства к сети выполните команду:"
-                echo ""
-                echo "  netbird up --management-url https://ваш-сервер.netbird.io --setup-key ВАШ-КЛЮЧ"
-                echo ""
-                echo "Где:"
-                echo "  https://ваш-сервер.netbird.io — адрес вашего management сервера"
-                echo "  ВАШ-КЛЮЧ — ваш setup key (можно скопировать из панели управления)"
-                echo ""
-                echo "Пример:"
-                echo "  netbird up --management-url https://netbird.EXAMPLE.ru --setup-key 12345678-90AB-CDEF-GABC-DEFG12345678"
-                echo ""
-                echo "⚠️  Важно: ключ должен быть в формате XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
-                echo "⚠️  Важно: не вводите "/" в конце URL для избежания двойного // в пути"
-                echo ""
-                log_info "После выполнения команды проверьте статус: netbird status"
-                echo ""
-                echo "======================================================="
-                echo "  УСТАНОВКА ЗАВЕРШЕНА!"
-                echo "======================================================="
-                echo ""
-                echo "Для управления используйте:"
-                echo "  netbird menu     - открыть меню управления"
-                echo "  netbird status   - показать статус"
-                echo "  netbird restart  - перезапустить сервис"
-                echo ""
-                echo "Для авторизации выполните команду выше и нажмите Enter"
-                printf "Нажмите Enter для продолжения..."
-                read dummy
-                post_install_menu
-            fi
+            print_header "УСТАНОВКА ЗАВЕРШЕНА!"
+            echo ""
+            echo "Для управления используйте:"
+            echo "  netbird-ctl menu     - открыть меню управления"
+            echo "  netbird-ctl status   - показать статус"
+            echo "  netbird-ctl logs     - показать логи"
+            echo "  netbird-ctl restart  - перезапустить демон"
+            echo ""
+            echo "Для авторизации выполните:"
+            echo "  netbird up --management-url https://ваш-сервер --setup-key ВАШ-КЛЮЧ"
+            echo ""
             ;;
-        start) start_service ;;
-        stop) stop_service ;;
-        restart) restart_service ;;
-        fullrestart) full_restart ;;
-        status) show_status ;;
-        logs) show_logs 100 ;;
-        menu) post_install_menu ;;
-        update) update_script ;;
-        uninstall) 
+        uninstall)
             uninstall
-            [ -L /opt/bin/netbird ] && rm -f /opt/bin/netbird
             ;;
-        help|*) usage ;;
+        help|*)
+            usage
+            ;;
     esac
 }
 
-SCRIPT_PATH=$(readlink -f "$0" 2>/dev/null || echo "/opt/bin/netbird")
-
-parse_args "$@"
-main
+main "$@"
 exit 0
