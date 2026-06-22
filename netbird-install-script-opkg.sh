@@ -1,6 +1,6 @@
 #!/bin/sh
 # ==========================================================
-# NetBird Installer для Keenetic v4.6 (Финальная рабочая)
+# NetBird Installer для Keenetic v4.6
 # ==========================================================
 
 set -e
@@ -319,11 +319,22 @@ if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
     SETUP_KEY=$(netbird status 2>/dev/null | grep 'Setup Key' | cut -d: -f2- | xargs)
     /opt/etc/init.d/S99netbird stop
     sleep 2
-    if netbird up --help 2>&1 | grep -q -- "--hostname"; then
-        netbird up --management-url "$MGMT_URL" --setup-key "$SETUP_KEY" --hostname "$new_name"
+    
+    # Исправленный блок изменения имени с безопасным разбором URL
+    if [ -z "$MGMT_URL" ] || [ "$MGMT_URL" = "https://netbird.io" ] || [ "$MGMT_URL" = "https://api.netbird.io" ]; then
+        if netbird up --help 2>&1 | grep -q -- "--hostname"; then
+            netbird login --setup-key "$SETUP_KEY" --hostname "$new_name"
+        else
+            netbird login --setup-key "$SETUP_KEY" --name "$new_name"
+        fi
     else
-        netbird up --management-url "$MGMT_URL" --setup-key "$SETUP_KEY" --name "$new_name"
+        if netbird up --help 2>&1 | grep -q -- "--hostname"; then
+            netbird login --management-url "$MGMT_URL" --setup-key "$SETUP_KEY" --hostname "$new_name"
+        else
+            netbird login --management-url "$MGMT_URL" --setup-key "$SETUP_KEY" --name "$new_name"
+        fi
     fi
+    netbird up
     echo "✓ Имя изменено на: $new_name"
 else
     echo "Операция отменена"
@@ -338,7 +349,7 @@ opkg update && opkg upgrade netbird
 echo "Обновление завершено"
 EOF
     
-    chmod +x "$CONFIG_DIR/"change_name.sh "$CONFIG_DIR/"update.sh
+    chmod +x "$CONFIG_DIR/change_name.sh" "$CONFIG_DIR/update.sh"
     log_info "✓ Дополнительные инструменты настроены"
     return 0
 }
@@ -670,31 +681,46 @@ main() {
                 
                 echo ""
                 if [ -n "$SETUP_KEY" ]; then
-                    AUTH_ARGS="--management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
-                    
-                    if [ -n "$DEVICE_NAME" ]; then
-                        if netbird up --help 2>&1 | grep -q -- "--hostname"; then
-                            AUTH_ARGS="$AUTH_ARGS --hostname \"$DEVICE_NAME\""
-                            log_info "Использую --hostname для имени устройства: $DEVICE_NAME"
-                        else
-                            log_info "Имя будет взято из config.json"
-                        fi
-                    fi
-                    
                     log_info "Подключение к management серверу: $MANAGEMENT_URL"
                     log_info "Setup Key: ${SETUP_KEY:0:8}... (скрыто)"
                     echo ""
                     
-                    # Пытаемся авторизоваться
-                    eval "netbird up $AUTH_ARGS --timeout 120" || {
-                        log_error "❌ Ошибка подключения!"
-                        echo ""
-                        log_info "Попробуйте вручную:"
-                        echo "  netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\""
-                        if [ -n "$DEVICE_NAME" ]; then
-                            echo "  c именем: netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\" --hostname \"$DEVICE_NAME\""
+                    # Полностью переписанная и безопасная логика авторизации без опасных eval "netbird up..."
+                    # 1. Сначала привязываем ноду через стабильный netbird login
+                    if [ "$MANAGEMENT_URL" = "https://netbird.io" ] || [ "$MANAGEMENT_URL" = "https://api.netbird.io" ]; then
+                        if [ -n "$DEVICE_NAME" ] && netbird up --help 2>&1 | grep -q -- "--hostname"; then
+                            netbird login --setup-key "$SETUP_KEY" --hostname "$DEVICE_NAME"
+                        else
+                            netbird login --setup-key "$SETUP_KEY"
                         fi
-                    }
+                    else
+                        if [ -n "$DEVICE_NAME" ] && netbird up --help 2>&1 | grep -q -- "--hostname"; then
+                            netbird login --management-url "$MANAGEMENT_URL" --setup-key "$SETUP_KEY" --hostname "$DEVICE_NAME"
+                        else
+                            netbird login --management-url "$MANAGEMENT_URL" --setup-key "$SETUP_KEY"
+                        fi
+                    fi
+                    
+                    # 2. Если логин успешен — поднимаем интерфейс
+                    if [ $? -eq 0 ]; then
+                        log_info "✓ Авторизация успешна. Поднимаем сетевой интерфейс..."
+                        netbird up --timeout 60
+                        
+                        if [ $? -eq 0 ]; then
+                            log_info "✅ Сеть NetBird успешно поднята!"
+                        else
+                            log_error "❌ Ошибка при выполнении netbird up"
+                        fi
+                    else
+                        log_error "❌ Ошибка подключения на этапе netbird login!"
+                        echo ""
+                        log_info "Попробуйте выполнить команду вручную:"
+                        if [ "$MANAGEMENT_URL" = "https://netbird.io" ]; then
+                            echo "  netbird login --setup-key \"$SETUP_KEY\" && netbird up"
+                        else
+                            echo "  netbird login --management-url \"$MANAGEMENT_URL\" --setup-key \"$SETUP_KEY\" && netbird up"
+                        fi
+                    fi
                 else
                     log_warn "Ключ не введен. Авторизация пропущена."
                     log_info "Выполните позже: netbird up --management-url \"$MANAGEMENT_URL\" --setup-key \"ВАШ-КЛЮЧ\""
